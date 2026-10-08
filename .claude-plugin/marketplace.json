@@ -1,0 +1,14 @@
+{
+  "name": "cc-visualizer",
+  "description": "A music visualizer for Claude Code.",
+  "owner": {
+    "name": "Max Retter"
+  },
+  "plugins": [
+    {
+      "name": "visualizer",
+      "source": "./",
+      "description": "A music-visualizer spectrum that dances to what Claude is doing: thinking, streaming text, tool calls and their arguments."
+    }
+  ]
+}
