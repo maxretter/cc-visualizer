@@ -13,6 +13,8 @@ const MINI_ROWS = 2
 const MINI_LAYOUT: Layout = { width: 1, gap: 1 }
 /** The most columns the tool names beside the mini spectrum take. */
 const MINI_NAMES = 56
+/** While only the idle show plays, frames come this many times slower, each moving it as far. */
+const IDLE_STEPS = 2
 const MODES: readonly VizMode[] = ['auto', 'always', 'off']
 const SIZES: readonly VizSize[] = ['full', 'mini']
 
@@ -30,12 +32,13 @@ const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, M
 const USAGE = [
   '/viz               toggle the band above the prompt',
   '/viz auto          show it while Claude works (default)',
-  '/viz always        keep it up, flat while idle',
+  '/viz always        keep it up, with an idle show while quiet',
   '/viz off           hide it, and close the pane',
   '/viz mini          a small spectrum at the right edge',
   '/viz full          the band across the whole width',
   '/viz pane          a big view with a legend',
   '/viz demo          play a few bars without a turn',
+  '/viz idle [on|off] the idle show (with always, or in the pane)',
   `/viz theme [name]  ${THEME_NAMES.join(', ')}`,
 ].join('\n')
 
@@ -55,11 +58,18 @@ export const register: Register = on => {
   const spectrum = new Spectrum()
   const sites = new Map<string, Site>()
   let ticker: Timer | undefined
+  let tempo = FRAME_MS
   let modeNow: VizMode = 'auto'
   let themeNow: VizTheme = 'instrument'
+  let idleNow = true
   // Runs the frames until the music stops and the bars have fallen; made by
   // session.start, whose `$` the frames draw through.
   let wake = () => {}
+  // Starts the idle show on a drawing that stays up, if nothing plays yet.
+  let rest = () => {}
+
+  // A drawing stays up once all is quiet: the pane, or the band shown always.
+  const isAmbient = () => idleNow && (sites.has(PANE) || (modeNow === 'always' && sites.size > 0))
 
   // A drawing of the same key and size keeps its bars where they stood.
   const mount = (requestId: string, key: string, columns: number, rows: number, extra: Mount = {}): Site => {
@@ -68,6 +78,7 @@ export const register: Register = on => {
     const bars = isSame ? had.bars : new Bars(columns, rows, extra.layout)
     const site = { requestId, key, bars, labels: extra.labels ?? false, names: extra.names }
     sites.set(requestId, site)
+    rest()
     return site
   }
 
@@ -80,29 +91,48 @@ export const register: Register = on => {
         () => {},
       )
     }
+    const run = (ms: number) => {
+      if (ticker !== undefined && tempo === ms) return
+      ticker?.cancel()
+      tempo = ms
+      ticker = $.clock.every(ms, frame)
+    }
     const frame = () => {
-      spectrum.step()
+      spectrum.ambient = isAmbient()
+      for (let k = tempo === FRAME_MS ? 1 : IDLE_STEPS; k > 0; k--) {
+        spectrum.step()
+        for (const site of sites.values()) site.bars.step(spectrum)
+      }
       for (const site of sites.values()) {
-        site.bars.step(spectrum)
         blit(site, site.key, site.bars.paint(themeNow, spectrum, site.labels))
         if (site.names) blit(site, site.names.key, trail(spectrum, themeNow, site.names.columns, site.names.rows))
       }
-      if (spectrum.isQuiet() && [...sites.values()].every(site => site.bars.isSettled())) {
+      if (!spectrum.isResting()) return
+      // The music stopped: the idle show, slower, on a drawing that stays up; or stop once the bars have fallen.
+      if (spectrum.ambient) {
+        if (tempo !== FRAME_MS) return
+        run(FRAME_MS * IDLE_STEPS)
+      } else if (spectrum.isQuiet() && [...sites.values()].every(site => site.bars.isSettled())) {
         ticker?.cancel()
         ticker = undefined
-        void update($, isPlaying, () => false)
+      } else {
+        return
       }
+      void update($, isPlaying, () => false)
     }
     wake = () => {
-      if (ticker !== undefined || (modeNow === 'off' && sites.size === 0)) return
-      ticker = $.clock.every(FRAME_MS, frame)
+      if ((ticker !== undefined && tempo === FRAME_MS) || (modeNow === 'off' && sites.size === 0)) return
+      run(FRAME_MS)
       void update($, isPlaying, () => true)
+    }
+    rest = () => {
+      if (ticker === undefined && isAmbient()) run(FRAME_MS * IDLE_STEPS)
     }
 
     await $.command.register({
       name: 'viz',
       description: 'Music visualizer for what Claude is doing',
-      argumentHint: '[auto|always|off|mini|full|pane|demo|theme <name>]',
+      argumentHint: '[auto|always|off|mini|full|pane|demo|idle|theme <name>]',
       immediate: true,
     })
     const saved = await $.store.get('prefs')
@@ -119,6 +149,7 @@ export const register: Register = on => {
       await update($, theme, () => savedTheme)
     }
     if (isSize(savedSize)) await update($, size, () => savedSize)
+    if (typeof prefs.idle === 'boolean') idleNow = prefs.idle
     await update($, isPlaying, () => false)
 
     return next(e)
@@ -292,6 +323,15 @@ export const register: Register = on => {
       if (was === 'off') m = 'auto'
       spectrum.playDemo()
       text = was === 'off' ? 'Visualizer on, playing a demo.' : 'Playing a demo for a few seconds.'
+    } else if (verb === 'idle') {
+      const isOn = arg === '' ? !idleNow : arg === 'on' ? true : arg === 'off' ? false : undefined
+      if (isOn === undefined) return { text: 'Usage: /viz idle [on|off]' }
+      idleNow = isOn
+      text = !isOn
+        ? 'Idle animation off: the bars rest flat.'
+        : m === 'always'
+          ? 'Idle animation on: a swell, rain and a scanner, in turn.'
+          : 'Idle animation on. It plays on a band that stays up: /viz always, or the pane.'
     } else if (verb === 'theme') {
       if (arg === '') {
         t = THEME_NAMES[(THEME_NAMES.indexOf(t) + 1) % THEME_NAMES.length]!
@@ -314,7 +354,7 @@ export const register: Register = on => {
     await update($, mode, () => m)
     await update($, theme, () => t)
     await update($, size, () => z)
-    await $.store.set('prefs', { mode: m, theme: t, size: z })
+    await $.store.set('prefs', { mode: m, theme: t, size: z, idle: idleNow })
     wake()
 
     return { text }

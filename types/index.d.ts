@@ -13,7 +13,7 @@ declare module 'claude-code' {
       mode: VizMode
       theme: VizTheme
       size: VizSize
-      /** True while the animation runs (activity, or bars still falling). */
+      /** True while the music plays (activity, or bars still falling); not the idle show. */
       isPlaying: boolean
       /** True while the big pane is open; the band steps aside for it. */
       isPaneOpen: boolean

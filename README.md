@@ -45,7 +45,7 @@ Each kind of activity is an instrument with its own place on the spectrum, low t
 - **Tool calls:** a hit on the tool's band, then a held note while it runs. Its name shows over the band and fades a few seconds after it finishes.
 - **Prompts and turns:** sending a prompt sweeps up the spectrum. Finishing a turn crashes a cymbal, and interrupting one sweeps back down.
 - **Errors:** a tool error flashes the bars red.
-- **Idle:** the animation runs only while something is happening, and stops once the bars have fallen.
+- **Idle:** a band that stays up (`/viz always`, or the pane) plays a low show while nothing happens, labeled `idle` with how long it's been: a rolling swell, rain, and a scanner sweeping back and forth, 20 seconds each, drawn at half the frame rate. Otherwise the animation stops once the bars have fallen.
 
 ## Install
 
@@ -65,15 +65,16 @@ This needs a Claude Code build with plugin function hooks: it was built against 
 | --- | --- |
 | `/viz` | toggle the visualizer on or off |
 | `/viz auto` | show it while Claude works (default) |
-| `/viz always` | keep it up, flat while idle |
+| `/viz always` | keep it up, with an idle show while quiet |
 | `/viz off` | hide it, and close the pane |
 | `/viz mini` | a small spectrum at the right edge, with tool names beside it |
 | `/viz full` | the band across the whole width |
 | `/viz pane` | a big view with a legend (docked beside the transcript in fullscreen) |
 | `/viz demo` | play a few seconds of thinking and drums without a turn |
+| `/viz idle [on\|off]` | the idle show (on by default); off leaves the bars flat |
 | `/viz theme [name]` | `instrument` (default), `claude`, `synthwave`, `classic`; no name cycles |
 
-Your mode, size and theme are remembered across sessions.
+Your mode, size, theme and idle setting are remembered across sessions.
 
 ## Development
 

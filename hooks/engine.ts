@@ -56,6 +56,14 @@ export function sourceOf(tool: string): SourceId {
 
 const bump = (d: number, sigma: number) => Math.exp(-(d * d) / (2 * sigma * sigma))
 
+/** The idle show's swell at a point of the spectrum: a low wave rolling up it, breathing. */
+function drift(x: number, f: number): number {
+  const swell = 0.5 + 0.5 * Math.sin(2 * Math.PI * 1.4 * x - f * 0.035)
+  const ripple = 0.7 + 0.3 * Math.sin(2 * Math.PI * 2.6 * x + f * 0.022 + 1)
+  const breath = 0.8 + 0.2 * Math.sin(f * 0.019)
+  return 0.34 * swell * ripple * breath
+}
+
 /** A tool's name as drawn: an MCP tool without its server, printable, short. */
 export function shortName(tool: string): string {
   const name = tool.startsWith('mcp__') ? tool.split('__').slice(2).join('__') || tool : tool
@@ -69,6 +77,13 @@ export type Call = { name: string; source: SourceId; count: number; running: num
 const LINGER = 60
 const FADE = 30
 const DEMO_TOOLS = ['Grep', 'Read', 'Read', 'Edit', 'Bash', 'WebFetch', 'Agent', 'Write']
+/** The idle show's scenes, in turn: a rolling swell, rain, a scanner sweeping back and forth. */
+export const SCENES = ['swell', 'rain', 'scanner'] as const
+/** Frames each scene plays (20 s), the last of them crossfading into the next. */
+const SCENE = 600
+const SCENE_FADE = 60
+/** Frames of the scanner's sweep there and back. */
+const SCAN = 240
 /** Frames the demo thinks before the drums come in. */
 const DEMO_THINK = 75
 
@@ -88,6 +103,22 @@ export class Spectrum {
   frame = 0
   /** A tool error's red flash, 1 fading to 0. */
   flash = 0
+  /**
+   * Whether to play the idle show once the music stops: set by the drawing,
+   * which knows whether a band stays up while idle.
+   */
+  ambient = false
+  /** How present the idle show is: fades in once all is quiet, out at the first sound. */
+  idle = 0
+  /** Frames since the music stopped: how long Claude has been idle. */
+  quietFor = 0
+  /** Frames the idle show has played, across rests: where it is in its scenes. */
+  private show = 0
+  /** How much each scene plays now, by `SCENES`. */
+  private readonly scene = new Float64Array(SCENES.length)
+  /** The rain's drops: where each fell, and how much of it is left. */
+  private readonly drops: { x: number; energy: number }[] = []
+  private readonly rand = random(0x1d1e)
   private crash = 0
   private sweep: number | undefined
   private sweepDirection = 1
@@ -214,6 +245,35 @@ export class Spectrum {
     for (let i = this.calls.length - 1; i >= 0; i--) {
       if (this.strength(this.calls[i]!) === 0) this.calls.splice(i, 1)
     }
+    const isResting = this.isResting()
+    this.quietFor = isResting ? this.quietFor + 1 : 0
+    const idle = this.ambient && isResting ? 1 : 0
+    this.idle += (idle - this.idle) * (idle > this.idle ? 0.025 : 0.15)
+    if (idle === 0 && this.idle < 0.01) this.idle = 0
+    if (this.idle > 0) this.play()
+    else this.drops.length = 0
+  }
+
+  /** The idle show moves on: its scenes, and the rain while it falls. */
+  private play() {
+    this.show += 1
+    const t = this.show % (SCENE * SCENES.length)
+    const now = Math.floor(t / SCENE)
+    const fade = Math.max(0, (t % SCENE) - (SCENE - SCENE_FADE)) / SCENE_FADE
+    this.scene.fill(0)
+    this.scene[now] = 1 - fade
+    this.scene[(now + 1) % SCENES.length] = fade
+    for (let i = this.drops.length - 1; i >= 0; i--) {
+      const drop = this.drops[i]!
+      drop.energy *= 0.8
+      if (drop.energy < 0.01) this.drops.splice(i, 1)
+    }
+    if (this.rand() < 0.18 * this.scene[1]!) this.drops.push({ x: this.rand(), energy: 0.4 + 0.45 * this.rand() })
+  }
+
+  /** The scene the idle show plays most now. */
+  get sceneNow(): (typeof SCENES)[number] {
+    return SCENES[this.scene.indexOf(Math.max(...this.scene))]!
   }
 
   /** The energy at a point of the spectrum, 0 (lowest) to 1 (highest). */
@@ -228,11 +288,28 @@ export class Spectrum {
     energy += 0.12 * (sum / N)
     if (this.sweep !== undefined) energy += 0.9 * bump(x - this.sweep, 0.045)
     energy += this.crash * (0.15 + 0.6 * x)
+    if (this.idle > 0) energy += this.idle * this.idleAt(x)
+    return energy
+  }
+
+  /** The idle show's energy at a point of the spectrum: its scenes, crossfading. */
+  private idleAt(x: number): number {
+    const [swell, rain, scanner] = this.scene
+    let energy = 0
+    if (swell! > 0) energy += swell! * drift(x, this.show)
+    if (rain! > 0) energy += 0.15 * rain! * drift(x, this.show)
+    for (const drop of this.drops) energy += drop.energy * bump(x - drop.x, 0.022)
+    if (scanner! > 0) energy += 0.5 * scanner! * bump(x - (0.5 - 0.5 * Math.cos((2 * Math.PI * this.show) / SCAN)), 0.035)
     return energy
   }
 
   /** Nothing playing and nothing left to fade. */
   isQuiet(): boolean {
+    return this.isResting() && this.idle === 0
+  }
+
+  /** Nothing playing and nothing left to fade but the idle show. */
+  isResting(): boolean {
     return (
       this.level.every(l => l === 0) &&
       this.held.every(h => h === 0) &&
@@ -404,8 +481,31 @@ function nameColor(theme: VizTheme, source: SourceId, strength: number): number 
 
 const label = (call: Call) => (call.count > 1 ? `${call.name}\u00d7${call.count}` : call.name)
 
-/** A name the trail or the labels draw: a tool call, or the thinking. */
-type Named = { text: string; source: SourceId; strength: number; isRunning: boolean }
+/** A name the trail or the labels draw: a tool call, the thinking, or the idle. */
+type Named = { text: string; source: SourceId; strength: number; isRunning: boolean; color?: number }
+
+/** How long Claude has been idle, as its label says it: `idle`, `idle 4m`, `idle 1h 5m`. */
+export function idleText(frames: number): string {
+  const minutes = Math.floor((frames * FRAME_MS) / 60000)
+  if (minutes < 1) return 'idle'
+  if (minutes < 60) return `idle ${minutes}m`
+  return `idle ${Math.floor(minutes / 60)}h ${minutes % 60}m`
+}
+
+/** While the idle show plays: its label, gray, breathing slowly. */
+const idleName = (spectrum: Spectrum): Named | undefined =>
+  spectrum.idle > 0.05
+    ? {
+        text: idleText(spectrum.quietFor),
+        source: 'think',
+        strength: spectrum.idle * (0.7 + 0.2 * Math.sin(spectrum.frame * 0.04)),
+        isRunning: false,
+        color: LEGEND_GRAY,
+      }
+    : undefined
+
+const nameColorOf = (theme: VizTheme, name: Named, strength: number) =>
+  name.color === undefined ? nameColor(theme, name.source, strength) : mix(0, name.color, strength)
 
 const thinkingName = (spectrum: Spectrum): Named | undefined =>
   spectrum.mind > 0.05 ? { text: 'thinking', source: 'think', strength: spectrum.mind, isRunning: spectrum.thinking > 0 } : undefined
@@ -426,8 +526,10 @@ export function trail(spectrum: Spectrum, theme: VizTheme, columns: number, rows
   const row = rows - 1
   const dot = mix(0, LEGEND_GRAY, 0.6)
   const thinking = thinkingName(spectrum)
+  const idle = idleName(spectrum)
   const names = spectrum.calls.map(call => callName(spectrum, call)).reverse()
   if (thinking !== undefined) names.unshift(thinking)
+  if (idle !== undefined) names.unshift(idle)
   let end = columns - 2
   let placed = 0
   for (const name of names) {
@@ -441,7 +543,7 @@ export function trail(spectrum: Spectrum, theme: VizTheme, columns: number, rows
       write(words, columns, row, end - gap, ' \u00b7 ', dot)
       end -= gap
     }
-    write(words, columns, row, end - text.length, text, nameColor(theme, name.source, strength))
+    write(words, columns, row, end - text.length, text, nameColorOf(theme, name, strength))
     end -= text.length
     if (spin > 0) {
       const cell = (row * columns + end - 2) * 3
@@ -516,9 +618,12 @@ export class Bars {
   /** Moves the bars toward the spectrum: a fast rise, a heavy fall. */
   step(spectrum: Spectrum) {
     const f = spectrum.frame
+    // The idle show moves smoothly: the shimmer calms while it plays.
+    const shimmer = 1 - 0.8 * spectrum.idle
     for (let b = 0; b < this.count; b++) {
       const x = (b + 0.5) / this.count
-      const wobble = 0.8 + 0.22 * Math.sin(f * this.speed[b]! + this.phase[b]!) + 0.16 * (this.rand() - 0.5)
+      const jitter = 0.22 * Math.sin(f * this.speed[b]! + this.phase[b]!) + 0.16 * (this.rand() - 0.5)
+      const wobble = 0.8 + jitter * shimmer
       const target = 1 - Math.exp(-2.1 * spectrum.at(x) * wobble)
       let h = this.height[b]!
       h = target > h ? h + (target - h) * 0.7 : Math.max(target, h - 0.025 - h * 0.05)
@@ -626,6 +731,11 @@ export class Bars {
   /** The newest call of each tool band, its name in the top row over the band. */
   private label(words: Uint32Array, theme: VizTheme, spectrum: Spectrum) {
     let free = 0
+    const idle = idleName(spectrum)
+    if (idle !== undefined && this.offset + idle.text.length <= this.columns) {
+      write(words, this.columns, 0, this.offset, idle.text, nameColorOf(theme, idle, idle.strength))
+      free = this.offset + idle.text.length + 1
+    }
     for (const source of SOURCES) {
       let name = source.id === 'think' ? thinkingName(spectrum) : undefined
       for (let i = spectrum.calls.length - 1; i >= 0 && name === undefined; i--) {
