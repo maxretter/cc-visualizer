@@ -124,6 +124,8 @@ export const register: Register = on => {
   let modeNow: VizMode = 'auto'
   let themeNow: VizTheme = 'instrument'
   let idleNow = true
+  // Whether Claude is working, as the prompt's band and hint line are told.
+  let isWorking = false
   // The prompt's column less the band's five, as the band above is told it:
   // narrower beside a docked pane. The hint line is told only the screen's.
   let bodyColumns: number | undefined
@@ -301,6 +303,21 @@ export const register: Register = on => {
     await update($, isPlaying, () => ticker !== undefined && tempo === FRAME_MS)
     // The meter as it stood, after a reload or on a resumed session.
     void measureContext($).then(remeasured, () => {})
+
+    return next(e)
+  })
+
+  // The person types: the keys play on a band that is up anyway (always, the
+  // pane, or while Claude works), and never raise one, which would move the
+  // prompt they are typing in.
+  on('prompt.edit', ($, e, next) => {
+    if (sites.size > 0 && (isWorking || modeNow === 'always' || sites.has(PANE))) {
+      const erased = e.text.slice(e.start, e.end)
+      if (e.inputText !== '') spectrum.typed(e.inputText)
+      else if (erased !== '') spectrum.typed(erased, true)
+      else spectrum.moved(e.text.length === 0 ? 0.5 : e.start / e.text.length)
+      wake()
+    }
 
     return next(e)
   })
@@ -516,6 +533,7 @@ export const register: Register = on => {
     ])
     modeNow = m
     themeNow = t
+    if (e.surface === 'terminal') isWorking = e.props.isWorking
     if (e.surface === 'terminal' && e.props.bodyColumns !== bodyColumns) {
       const had = bodyColumns
       bodyColumns = e.props.bodyColumns
@@ -544,6 +562,7 @@ export const register: Register = on => {
     ])
     modeNow = m
     themeNow = t
+    if (e.surface === 'terminal') isWorking = e.props.isWorking
     const hint = await next(e)
     const isShown = m === 'always' || (m === 'auto' && (e.props.isWorking || playing))
     if (e.surface !== 'terminal' || paneOpen || !isShown || p !== 'below') {

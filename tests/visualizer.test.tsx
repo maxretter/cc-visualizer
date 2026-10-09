@@ -1,8 +1,8 @@
-import type { On, SessionUsage, ToolCallResult } from 'claude-code'
+import type { On, PromptEditInput, PromptEditResult, SessionUsage, ToolCallResult } from 'claude-code'
 import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
-import { BEAT, Bars, FRAME_MS, GRACE, Spectrum, clockText, idleText, mix, shortName, sourceOf, trail } from '../hooks/engine'
+import { BEAT, Bars, FRAME_MS, GRACE, IDLE_DELAY, Spectrum, clockText, idleText, mix, placeOf, shortName, sourceOf, trail } from '../hooks/engine'
 
 /** The glyphs of Raster cells, row by row. */
 const text = (cells: string, columns: number): string[] => {
@@ -98,6 +98,10 @@ const staged = async ($: Engine, on: On, mode = 'always', context?: () => object
   on('classic.PostToolUseFailure', () => ({}))
   on('classic.SessionStart', () => ({}))
   on('config.set', ($, e) => ({ value: e.value }))
+  on('prompt.edit', ($, e) => ({
+    text: e.text.slice(0, e.start) + e.inputText + e.text.slice(e.end),
+    cursor: e.start + e.inputText.length,
+  }))
   if (context !== undefined) {
     on('session.usage', () => ({ value: { startedAt: 0, context: context(), rateLimits: [] } as unknown as SessionUsage }))
   }
@@ -420,6 +424,7 @@ describe('idle', () => {
   test('the scenes take turns: swell, rain, scanner, and round again', () => {
     const spectrum = new Spectrum()
     spectrum.ambient = true
+    spectrum.step(IDLE_DELAY)
     const seen: string[] = []
     for (let i = 0; i < 2000; i++) {
       spectrum.step()
@@ -435,6 +440,7 @@ describe('idle', () => {
 
     const spectrum = new Spectrum()
     spectrum.ambient = true
+    spectrum.step(IDLE_DELAY)
     for (let i = 0; i < 120; i++) spectrum.step()
     const [top] = text(new Bars(80, 4).paint('instrument', spectrum, true), 80)
     expect(top?.trimEnd()).toMatch(/^\s*idle$/)
@@ -741,6 +747,82 @@ describe('a band taken off screen', () => {
     const sent = blits()
     await clock.advance(2000)
     expect(blits()).toBe(sent)
+    await ui.unmount()
+  })
+})
+
+describe('typing', () => {
+  /** Plays `ms` of music, a frame at a time. */
+  const play = (spectrum: Spectrum, ms: number) => {
+    for (let t = 0; t < ms; t += FRAME_MS) spectrum.step()
+  }
+
+  test('a key plays where it sits on the keyboard: the left hand low, the right high', () => {
+    expect(placeOf('a')).toBeLessThan(0.2)
+    expect(placeOf('l')).toBeGreaterThan(0.8)
+    expect(placeOf('A')).toBe(placeOf('a'))
+    const left = new Spectrum()
+    left.typed('a')
+    left.step()
+    const right = new Spectrum()
+    right.typed('l')
+    right.step()
+    expect(left.at(placeOf('a'))).toBeGreaterThan(left.at(placeOf('l')) + 0.4)
+    expect(right.at(placeOf('l'))).toBeGreaterThan(right.at(placeOf('a')) + 0.4)
+  })
+
+  test('a paste plays as a run, a key at a time, and the notes fade', () => {
+    const spectrum = new Spectrum()
+    spectrum.typed('qwertyuiop')
+    spectrum.step()
+    // The run has begun at the left; the right hand is still to come.
+    expect(spectrum.at(placeOf('q'))).toBeGreaterThan(0.4)
+    expect(spectrum.at(placeOf('p'))).toBeLessThan(0.1)
+    play(spectrum, 250)
+    expect(spectrum.at(placeOf('p'))).toBeGreaterThan(0.4)
+    expect(spectrum.isCalm()).toBe(false)
+    play(spectrum, 1500)
+    expect(spectrum.isCalm()).toBe(true)
+  })
+
+  test('typing holds off the idle show, which waits for a quiet spell to come back', () => {
+    const spectrum = new Spectrum()
+    spectrum.ambient = true
+    play(spectrum, IDLE_DELAY - 1000)
+    expect(spectrum.idle).toBe(0)
+    play(spectrum, 6000)
+    expect(spectrum.idle).toBeGreaterThan(0.95)
+
+    spectrum.typed('hello')
+    play(spectrum, 700)
+    expect(spectrum.idle).toBeLessThan(0.05)
+    // A pause to think is not idle.
+    play(spectrum, 5000)
+    expect(spectrum.idle).toBe(0)
+    play(spectrum, IDLE_DELAY)
+    expect(spectrum.idle).toBeGreaterThan(0.5)
+  })
+
+  test('the keys play on a band that is up, and never raise one', async ($, on) => {
+    const { clock, ui, blits } = await staged($, on, 'auto')
+    // The test engine raises prompt.edit as the composer does, though its
+    // typings (a plugin's own calls) leave it out.
+    const prompt = $.prompt as unknown as { edit: (e: PromptEditInput) => Promise<PromptEditResult> }
+    const edit = (inputText: string) => prompt.edit({ origin: { kind: 'composer' }, text: '', cursor: 0, start: 0, end: 0, inputText })
+    // Claude works: the band is up, and the keys play on it.
+    await clock.advance(3000)
+    const before = blits()
+    await edit('hi')
+    await clock.advance(200)
+    expect(blits()).toBeGreaterThan(before)
+
+    // Claude is done and the band has gone: typing does not bring it back.
+    await ui.redraw(band(false).props)
+    await clock.advance(5000)
+    const after = blits()
+    await edit('there')
+    await clock.advance(1000)
+    expect(blits()).toBe(after)
     await ui.unmount()
   })
 })

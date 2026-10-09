@@ -86,6 +86,19 @@ function drift(x: number, ms: number): number {
   return 0.34 * swell * ripple * breath
 }
 
+/** Where a key plays: where it sits on the keyboard, the left hand low and the right high; any other character, scattered. */
+export function placeOf(ch: string): number {
+  const c = ch.toLowerCase()
+  for (const [keys, shift] of KEYBOARD) {
+    const column = keys.indexOf(c)
+    if (column >= 0) return 0.06 + (0.88 * (column + shift)) / 9.5
+  }
+  return 0.06 + 0.88 * (((c.codePointAt(0) ?? 0) * 0.618034) % 1)
+}
+
+/** A typed key's note on the spectrum: where it plays, from when, how loud, and how wide. */
+type Note = { x: number; at: number; energy: number; sigma: number }
+
 /** A tool's name as drawn: an MCP tool without its server, printable, short. */
 export function shortName(tool: string): string {
   const name = tool.startsWith('mcp__') ? tool.split('__').slice(2).join('__') || tool : tool
@@ -111,6 +124,20 @@ const SCENE_FADE = 2_000
 const SCAN = 8_000
 /** Drops a second at the height of the rain. */
 const RAIN = 6
+/** How long all must be quiet before the idle show starts: a pause in typing, or a reply being read, is not idle. */
+export const IDLE_DELAY = 8_000
+/** A typed key's note: how fast it fades (it halves every 120 ms), and the beat of a run of them (a paste, a burst of keys). */
+const NOTE = 120
+const RUN = 25
+/** The most notes a run plays: a longer paste plays this many of its characters, spread over it. */
+const RUN_NOTES = 32
+/** The keyboard, row by row, with how far each row sits to the right, as a key's place on the spectrum. */
+const KEYBOARD: readonly (readonly [string, number])[] = [
+  ['1234567890', 0],
+  ['qwertyuiop', 0.5],
+  ['asdfghjkl', 0.75],
+  ['zxcvbnm', 1.25],
+]
 /** While the model thinks, sparks of thought a second on its band: these when it is calm, up to as many more again as its text streams. */
 const SPARKS = 1.5
 /** How long the demo plays, and how long it thinks before the drums come in. */
@@ -170,6 +197,8 @@ export class Spectrum {
   private readonly scene = new Float64Array(SCENES.length)
   /** The rain's drops: where each fell, and how much of it is left. */
   private readonly drops: { x: number; energy: number }[] = []
+  /** The notes the person's typing plays, still ringing or still to come in a run. */
+  private readonly notes: Note[] = []
   private readonly rand = random(0x1d1e)
   private crash = 0
   private sweep: number | undefined
@@ -261,6 +290,30 @@ export class Spectrum {
     if (call.running > 0) return 1
     const age = this.now - call.endedAt
     return age <= LINGER ? 0.9 : Math.max(0, 0.9 * (1 - (age - LINGER) / FADE))
+  }
+
+  /**
+   * The person typed `text` into the prompt: each character a note where its
+   * key sits, louder for a capital, a space a soft breath across the middle,
+   * and a paste or a burst of keys a run of them. With `isErased`, the text was
+   * deleted: quieter notes, the run going backward.
+   */
+  typed(text: string, isErased = false) {
+    const chars = [...text]
+    const count = Math.min(chars.length, RUN_NOTES)
+    for (let n = 0; n < count; n++) {
+      const i = Math.floor((n * chars.length) / count)
+      const ch = chars[isErased ? chars.length - 1 - i : i]!
+      const at = this.now + n * RUN
+      const loud = isErased ? 0.5 : 1
+      if (ch.trim() === '') this.notes.push({ x: 0.5, at, energy: 0.3 * loud, sigma: 0.14 })
+      else this.notes.push({ x: placeOf(ch), at, energy: (ch === ch.toLowerCase() ? 0.7 : 0.95) * loud, sigma: 0.03 })
+    }
+  }
+
+  /** The prompt's caret moved, to `x` of the way through the text: a faint tick there. */
+  moved(x: number) {
+    this.notes.push({ x: 0.06 + 0.88 * Math.max(0, Math.min(1, x)), at: this.now, energy: 0.25, sigma: 0.02 })
   }
 
   /** A sweep up the spectrum: a prompt was sent. */
@@ -404,12 +457,19 @@ export class Spectrum {
     if (t - this.glintAt >= GLINT_EVERY) this.glintAt = t
     this.crash = this.crash < 0.004 ? 0 : this.crash * fade(275, ms)
     this.flash = this.flash < 0.01 ? 0 : this.flash * fade(220, ms)
+    // The typed notes ring from when they come in.
+    for (let i = this.notes.length - 1; i >= 0; i--) {
+      const note = this.notes[i]!
+      if (note.at > t) continue
+      note.energy *= fade(NOTE, Math.min(ms, t - note.at))
+      if (note.energy < 0.01) this.notes.splice(i, 1)
+    }
     for (let i = this.calls.length - 1; i >= 0; i--) {
       if (this.strength(this.calls[i]!) === 0) this.calls.splice(i, 1)
     }
     const isResting = this.isResting()
     this.quietFor = isResting ? this.quietFor + passed : 0
-    const idle = this.ambient && isResting ? 1 : 0
+    const idle = this.ambient && isResting && this.quietFor >= IDLE_DELAY ? 1 : 0
     this.idle = ease(this.idle, idle, idle > this.idle ? 900 : 140, ms)
     if (idle === 0 && this.idle < 0.01) this.idle = 0
     if (this.idle > 0) this.play(ms)
@@ -470,6 +530,7 @@ export class Spectrum {
     energy += 0.12 * (sum / N)
     if (this.sweep !== undefined) energy += 0.9 * bump(x - this.sweep, 0.045)
     energy += this.crash * (0.15 + 0.6 * x)
+    for (const note of this.notes) if (note.at <= this.now) energy += note.energy * bump(x - note.x, note.sigma)
     if (this.idle > 0) energy += this.idle * this.idleAt(x)
     if (this.cue > 0) energy += this.cue * this.vampAt(x)
     return energy
@@ -540,6 +601,7 @@ export class Spectrum {
       this.crash === 0 &&
       this.flash === 0 &&
       this.demo === 0 &&
+      this.notes.length === 0 &&
       this.rewinding === 0 &&
       this.gauge === this.fill &&
       this.calls.every(call => call.running > 0 && call.running <= this.waitingOn(call))
