@@ -82,9 +82,37 @@ This needs a Claude Code build with plugin function hooks: it was built against 
 | `/viz ground [auto\|light\|dark]` | your terminal's background; `auto` (default) follows Claude Code's theme; no argument says what it's using |
 | `/viz doctor` | check your terminal's colors and glyphs against what the band expects |
 
-`/viz bar`, `/viz mini` and `/viz pos` close the pane, since the band steps aside while it's open. Your mode, size, position, theme, idle setting and background are remembered across sessions.
+`/viz bar`, `/viz mini` and `/viz pos` close the pane, since the band steps aside while it's open. Your mode, size, position, theme, idle setting and background are remembered across sessions. There's no position at the top of the screen: Claude Code keeps nothing pinned there for a plugin to draw in. The pane is the closest.
 
-On a light terminal the band paints for the light background: colors fade to white rather than black, and pale ones are darkened until they stand out. It follows Claude Code's theme (`/config`): a light theme means a light background. With the `auto` theme, the band reads the terminal's `COLORFGBG` if it's set, and otherwise assumes dark; `/viz ground light` settles it. `/viz doctor` shows what it found, with a swatch of the background it expects beside your terminal's own. There's no position at the top of the screen: Claude Code keeps nothing pinned there for a plugin to draw in. The pane is the closest.
+On a light terminal the band paints for the light background: colors fade to white rather than black, and pale ones are darkened until they stand out. It follows Claude Code's theme (`/config`): a light theme means a light background. With the `auto` theme, the band reads the terminal's `COLORFGBG` if it's set, and otherwise assumes dark; `/viz ground light` settles it. `/viz doctor` shows what it found, with a swatch of the background it expects beside your terminal's own.
+
+## What it does in your session
+
+The visualizer watches and draws. It changes nothing Claude Code does: every hook passes its event on unchanged, except `/viz`, which answers its own command. It decides no permission, writes no setting, sends nothing over the network, and runs no programs.
+
+Its hooks, all in `hooks/register.tsx`:
+
+| Hook | What it does |
+| --- | --- |
+| `session.start` | registers `/viz`, restores your `/viz` settings, reads Claude Code's theme and `COLORFGBG` to tell a light background, and reads the context window's fill |
+| `prompt.edit` | plays your keys on a band that's already up |
+| `prompt.submit` | a sweep up the spectrum |
+| `turn.step` | plays the response as it streams: thinking, text, tool calls, their arguments |
+| `turn.complete` | a cymbal at the end of a turn, a sweep down on an interrupt, red on an error |
+| `tool.call` | a hit on the tool's band, and a held note while it runs |
+| `classic.PostToolUseFailure` | a tool that failed flashes the bars red |
+| `classic.PermissionRequest` | when Claude Code is about to ask you to allow a tool, the band pulses amber until you answer. It decides nothing, and passes the request on as it came; the plugin has no hook on the permission decision itself |
+| `config.set` (`theme`, `autoCompact`) | when you change Claude Code's theme or auto-compact, it reads the new setting a moment later, to paint for the background or move the meter's top. The change passes on as it came |
+| `session.measure`, `session.compact`, `classic.SessionStart` | the context meter: its fill, a rewind while compacting, an estimate after `/clear` |
+| `ui.render` (`AbovePrompt`, `PromptHint`, `Pane`, `CommandOutput`, `ToolProgress`) | draws the band, the pane and `/viz doctor`'s swatches; a tool's progress row means a permission ask was answered |
+| `ui.close` | notes that the pane closed |
+| `command.run` (`viz`) | answers `/viz` |
+
+- **Reads:** the environment variables `COLORFGBG`, to tell a light background, and, for `/viz doctor`, `TERM`, `COLORTERM` and `TERM_PROGRAM`; Claude Code's theme setting; the session's context usage.
+- **Writes:** your `/viz` settings in the plugin's own store, and the same settings in its own state with whether it's playing and whether its pane is open.
+- **Sends:** nothing.
+
+The scripts in `scripts/` are for development and don't run with the plugin: `scripts/demo-gif/make.sh`, which you run by hand to remake the GIF above, starts `claude` and ffmpeg and installs the Python package pyte into a throwaway virtualenv.
 
 ## Development
 

@@ -394,7 +394,7 @@ export class Spectrum {
   }
 
   /** How long since the person was first asked, of the asks past their grace; undefined while none is. */
-  get waitedFor(): number | undefined {
+  waitedFor(): number | undefined {
     let first: number | undefined
     for (const ask of this.asks) if (this.isCued(ask) && (first === undefined || ask.at < first)) first = ask.at
     return first === undefined ? undefined : this.now - first
@@ -417,7 +417,7 @@ export class Spectrum {
   }
 
   /** While compacting. */
-  get isRewinding(): boolean {
+  isRewinding(): boolean {
     return this.rewinding > 0
   }
 
@@ -435,7 +435,7 @@ export class Spectrum {
   }
 
   /** How far a glint has run up the meter, 0 to 1; undefined between glints. */
-  get glint(): number | undefined {
+  glint(): number | undefined {
     const t = (this.now - this.glintAt) / GLINT_RUN
     return t < 1 ? t : undefined
   }
@@ -568,7 +568,7 @@ export class Spectrum {
   }
 
   /** The scene the idle show plays most now. */
-  get sceneNow(): (typeof SCENES)[number] {
+  sceneNow(): (typeof SCENES)[number] {
     return SCENES[this.scene.indexOf(Math.max(...this.scene))]!
   }
 
@@ -591,13 +591,13 @@ export class Spectrum {
   }
 
   /** Where the vamp is: the beat of its bar, and how far into that beat. */
-  private get beat(): { beat: number; into: number } {
+  private beat(): { beat: number; into: number } {
     return { beat: Math.floor(this.vamp / BEAT) % 4, into: (this.vamp % BEAT) / BEAT }
   }
 
   /** How strong the metronome's tick is now: 1 on the beat, fading through it. */
-  get tick(): number {
-    return this.cue > 0 ? Math.exp(-this.beat.into * 4) : 0
+  tick(): number {
+    return this.cue > 0 ? Math.exp(-this.beat().into * 4) : 0
   }
 
   /**
@@ -607,7 +607,7 @@ export class Spectrum {
    * pulses shrink and the hum goes.
    */
   private vampAt(x: number): number {
-    const { beat, into } = this.beat
+    const { beat, into } = this.beat()
     const groove = 1 - Math.max(0, Math.min(1, (this.vamp - BORED) / BORED_FADE))
     const pulse = (0.25 + 0.45 * groove) * (beat === 0 ? 1 : 0.7) * Math.exp(-into * 4) + 0.12 * groove
     let energy = 0
@@ -627,7 +627,7 @@ export class Spectrum {
   }
 
   /** How often the shows want a frame while the music rests. */
-  get showMs(): number {
+  showMs(): number {
     return this.isResting() && this.quietFor >= DROWSY ? DROWSY_MS : SHOW_MS
   }
 
@@ -967,12 +967,12 @@ export function clockText(ms: number): string {
 
 /** While the person is waited on: how long, in amber, pulsing with the metronome. */
 const waitingName = (spectrum: Spectrum): Named | undefined => {
-  const waited = spectrum.waitedFor
+  const waited = spectrum.waitedFor()
   return waited !== undefined && spectrum.cue > 0.05
     ? {
         text: `waiting on you \u00b7 ${clockText(waited)}`,
         source: 'think',
-        strength: spectrum.cue * (0.65 + 0.35 * spectrum.tick),
+        strength: spectrum.cue * (0.65 + 0.35 * spectrum.tick()),
         isRunning: false,
         color: CUE,
       }
@@ -981,7 +981,7 @@ const waitingName = (spectrum: Spectrum): Named | undefined => {
 
 /** While the conversation is compacted. */
 const compactingName = (spectrum: Spectrum): Named | undefined =>
-  spectrum.isRewinding
+  spectrum.isRewinding()
     ? { text: 'compacting', source: 'think', strength: 0.8 + 0.2 * Math.sin(cycle(spectrum.now, 2_070)), isRunning: true, color: LEGEND_GRAY }
     : undefined
 
@@ -1307,7 +1307,7 @@ export class Bars {
     const { columns, rows } = this
     const level = spectrum.gauge * rows
     const track = mix(GROUND[tone], LEGEND_GRAY, 0.22)
-    const glint = spectrum.glint
+    const glint = spectrum.glint()
     for (let r = 0; r < rows; r++) {
       const fill = level - r
       const top = Math.min(level, r + 1) / rows

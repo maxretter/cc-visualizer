@@ -17,6 +17,7 @@ import {
   command,
   doctorReport,
   factsOf,
+  argumentsOf,
   inputKey,
   isAmbient,
   isBandShown,
@@ -45,6 +46,8 @@ const PERSON = new Set(['AskUserQuestion', 'ExitPlanMode'])
 const MINI_NAMES = 56
 /** How long between tries at a drawing whose frames the engine refuses. */
 const RETRY = 500
+/** How long after a setting changes to read it again: by then it has been made, or refused. */
+const SETTLED = 100
 
 // The prefs the drawings read, published from the plugin's own copy, and what plays.
 const mode = atom({ plugin: 'visualizer', key: 'mode' } as const, DEFAULTS.mode)
@@ -77,6 +80,11 @@ async function measureContext($: EngineInterface): Promise<Measured> {
   return measuredFrom(context)
 }
 
+/** Claude Code's theme setting, as `/config` shows it: `dark`, `light`, `auto`, or another. */
+async function themeOf($: EngineInterface): Promise<unknown> {
+  return (await $.config.list().catch(() => [])).find(row => row.key === 'theme')?.value
+}
+
 /** The prefs, published for the drawings, which redraw as they change. */
 async function publish($: EngineInterface, prefs: Prefs) {
   await update($, mode, () => prefs.mode)
@@ -89,8 +97,8 @@ export const register: Register = on => {
   // The animation is the module's own: a reload starts it from silence.
   const spectrum = new Spectrum()
   const sites = new Map<string, Site>()
-  // Tool calls by their id while they run, the ones before the mode's decider,
-  // and the ones put to the person until answered.
+  // Tool calls by their id while they run, the ones that may yet be put to the
+  // person, and the ones put to the person until answered.
   const calls = new Map<string, Call>()
   const checks = new Map<string, Check>()
   const asks = new Map<string, Ask>()
@@ -239,7 +247,7 @@ export const register: Register = on => {
         isResting: spectrum.isResting(),
         isQuiet: spectrum.isQuiet(),
         isSettled: [...sites.values()].every(site => site.bars.isSettled()),
-        isGlinting: spectrum.glint !== undefined && spectrum.gauge > 0,
+        isGlinting: spectrum.glint() !== undefined && spectrum.gauge > 0,
         isHeld: [...sites.values()].some(site => site.retryAt !== undefined),
       })
       if (pacing === 'full') {
@@ -249,7 +257,7 @@ export const register: Register = on => {
       }
       if (pacing === 'same') return
       const wasFull = tempo === FRAME_MS
-      if (pacing === 'show') run(spectrum.showMs)
+      if (pacing === 'show') run(spectrum.showMs())
       else stop()
       if (wasFull) void update($, isPlaying, () => false)
     }
@@ -259,7 +267,7 @@ export const register: Register = on => {
       void update($, isPlaying, () => true)
     }
     rest = () => {
-      if (ticker === undefined && isAmbient(prefs, drawn())) run(spectrum.showMs)
+      if (ticker === undefined && isAmbient(prefs, drawn())) run(spectrum.showMs())
     }
 
     await $.command.register({ name: 'viz', description: 'Music visualizer for what Claude is doing', argumentHint: HINT, immediate: true })
@@ -267,7 +275,7 @@ export const register: Register = on => {
     await publish($, prefs)
     // The terminal's background, as Claude Code's theme and the terminal tell it.
     backdrop = {
-      theme: (await $.config.list().catch(() => [])).find(row => row.key === 'theme')?.value,
+      theme: await themeOf($),
       colorfgbg: await $.env.get('COLORFGBG').catch(() => undefined),
     }
     retone()
@@ -320,6 +328,7 @@ export const register: Register = on => {
     if (id !== undefined) {
       calls.set(id, call)
       if (PERSON.has(String(e.tool))) asks.set(id, spectrum.ask(call.source, call, 0))
+      else checks.set(id, { tool: e.tool, agentId: e.agentId, input: inputKey(argumentsOf(e)) })
     }
     wake()
     try {
@@ -345,22 +354,10 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // A tool call put to the mode's decider, which is not always the person: auto
-  // mode's classifier settles most, and the ones it hands on raise a permission
-  // request. A hook that fails leaves the verdict as it was.
-  on('tool.check', async ($, e, next) => {
-    const verdict = await next(e)
-    const id = e.tool_use_id
-    if (verdict.decision === 'ask' && id !== undefined && !asks.has(id)) {
-      checks.set(id, { tool: e.tool, agentId: e.agentId, input: inputKey(e.input) })
-    }
-
-    return verdict
-  })
-
-  // The person is asked: unless an answer comes within the grace (a hook's),
-  // its held note rests and the vamp plays until it is answered. A hook that
-  // fails leaves the request to the rest.
+  // The person is asked to allow a call: unless an answer comes within the grace
+  // (a hook's), its held note rests and the vamp plays until it is answered.
+  // Only asks that reach the person raise this, not the ones auto mode's
+  // classifier settles. It watches, and passes the request on unchanged.
   on('classic.PermissionRequest', ($, e, next) => {
     const id = requestFor(checks, e.tool_name, e.agent_id, e.tool_input)
     if (id !== undefined) {
@@ -404,24 +401,33 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // Claude Code's theme changed: the band follows it onto a light background or off one.
-  on('config.set', { key: 'theme' }, async ($, e, next) => {
-    const set = await next(e)
-    if (set.deny === undefined) {
-      backdrop = { ...backdrop, theme: set.value }
-      retone()
-      if (sites.size > 0) wake()
-    }
+  // Claude Code's theme changes: once it has, the band follows it onto a light
+  // background or off one. It watches, and passes the change on unchanged.
+  on('config.set', { key: 'theme' }, ($, e, next) => {
+    void $.clock
+      .sleep(SETTLED)
+      .then(() => themeOf($))
+      .then(
+        setting => {
+          backdrop = { ...backdrop, theme: setting }
+          retone()
+          if (sites.size > 0) wake()
+        },
+        () => {},
+      )
 
-    return set
+    return next(e)
   })
 
-  // Auto-compact turned on or off: the top of the meter moves.
-  on('config.set', { key: 'autoCompact' }, async ($, e, next) => {
-    const set = await next(e)
-    void measureContext($).then(remeasured, () => {})
+  // Auto-compact turned on or off: once it has, the top of the meter moves.
+  // It watches, and passes the change on unchanged.
+  on('config.set', { key: 'autoCompact' }, ($, e, next) => {
+    void $.clock
+      .sleep(SETTLED)
+      .then(() => measureContext($))
+      .then(remeasured, () => {})
 
-    return set
+    return next(e)
   })
 
   // The conversation compacts: the tape rewinds until it is done, and the meter drains.

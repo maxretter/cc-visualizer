@@ -3,6 +3,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import {
   DEFAULTS,
   USAGE,
+  argumentsOf,
   changes,
   command,
   doctorReport,
@@ -236,6 +237,14 @@ describe('permission requests', () => {
     expect(requestFor(checks, 'Bash', undefined, { command: 'make' })).toBe('t1')
     expect(requestFor(checks, 'Bash', 'a1', { command: 'make' })).toBe('t3')
     expect(requestFor(checks, 'Write', undefined, {})).toBeUndefined()
+  })
+
+  test("a call's own arguments, keyed the same however their keys came", () => {
+    expect(argumentsOf({ tool: 'Bash', tool_use_id: 't1', agentId: 'a1', requestMeta: {}, consent: 'yes', command: 'ls', timeout: 5 })).toEqual({
+      command: 'ls',
+      timeout: 5,
+    })
+    expect(inputKey({ b: 1, a: { d: [2, { f: 1, e: 0 }], c: 3 } })).toBe(inputKey({ a: { c: 3, d: [2, { e: 0, f: 1 }] }, b: 1 }))
   })
 
   test('an input that is no JSON has no key', () => {

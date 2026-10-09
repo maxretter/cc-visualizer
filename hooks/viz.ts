@@ -285,13 +285,32 @@ export function pace(beat: Beat): Pace {
 
 // Permission requests ------------------------------------------------------
 
-/** A tool call put to the mode's decider: its tool, its loop and its input, to know its permission request by. */
+/** A running tool call that may yet be put to the person: its tool, its loop and its input, to know its permission request by. */
 export type Check = { tool: string; agentId?: string; input?: string }
 
-/** A tool's input as text, to tell calls of one tool apart by. */
+/** What a `tool.call` carries beside the tool's own arguments. */
+const ENVELOPE = new Set(['tool', 'tool_use_id', 'agentId', 'requestMeta', 'consent'])
+
+/** A tool call's own arguments, as a permission request names them: its input less the envelope. */
+export const argumentsOf = (call: Readonly<Record<string, unknown>>): Record<string, unknown> =>
+  Object.fromEntries(Object.entries(call).filter(([key]) => !ENVELOPE.has(key)))
+
+/** A value with its keys in order, at every depth: the same input, the same text, however its keys came. */
+const sorted = (value: unknown): unknown =>
+  Array.isArray(value)
+    ? value.map(sorted)
+    : typeof value === 'object' && value !== null
+      ? Object.fromEntries(
+          Object.keys(value)
+            .sort()
+            .map(key => [key, sorted((value as Record<string, unknown>)[key])]),
+        )
+      : value
+
+/** A tool's input as text, to tell calls of one tool apart by: none for one that is no JSON. */
 export function inputKey(input: unknown): string | undefined {
   try {
-    return JSON.stringify(input)
+    return JSON.stringify(sorted(input))
   } catch {
     return undefined
   }

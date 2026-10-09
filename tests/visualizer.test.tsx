@@ -115,7 +115,9 @@ const staged = async ($: Engine, on: On, { mode = 'always', context, env = {}, t
   const clock = mock.clock(on)
   mock.store(on)
   mock.env(on, env)
-  if (theme !== undefined) on('config.list', () => ({ value: [{ key: 'theme', value: theme }] as unknown as ConfigRow[] }))
+  // Claude Code's theme setting, as /config lists it and changes it.
+  let setting = theme
+  if (theme !== undefined) on('config.list', () => ({ value: [{ key: 'theme', value: setting }] as unknown as ConfigRow[] }))
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('command.run', () => ({ text: '' }))
@@ -147,7 +149,11 @@ const staged = async ($: Engine, on: On, { mode = 'always', context, env = {}, t
   on('classic.PermissionRequest', () => ({}))
   on('classic.PostToolUseFailure', () => ({}))
   on('classic.SessionStart', () => ({}))
-  on('config.set', ($, e) => ({ value: e.value }))
+  on('config.set', ($, e) => {
+    if (e.key === 'theme' && typeof e.value === 'string') setting = e.value
+
+    return { value: e.value }
+  })
   on('prompt.submit', ($, e) => ({ text: e.text }))
   on('turn.complete', ($, e) => ({ text: e.answer }))
   on('session.measure', ($, e) => ({ changed: e.changed }))
@@ -291,7 +297,7 @@ describe('time', () => {
     spectrum.step(600_000)
     bars.step(spectrum)
     expect(spectrum.dt).toBe(250)
-    expect(clockText(spectrum.waitedFor!)).toBe('10:00')
+    expect(clockText(spectrum.waitedFor()!)).toBe('10:00')
     const [, bottom] = text(trail(spectrum, 'instrument', 50, 2), 50)
     expect(bottom).toContain('waiting on you · 10:00')
   })
@@ -532,7 +538,7 @@ describe('idle', () => {
     const seen: string[] = []
     for (let i = 0; i < 2000; i++) {
       spectrum.step()
-      if (seen.at(-1) !== spectrum.sceneNow) seen.push(spectrum.sceneNow)
+      if (seen.at(-1) !== spectrum.sceneNow()) seen.push(spectrum.sceneNow())
     }
     expect(seen).toEqual(['swell', 'rain', 'scanner', 'swell'])
   })
@@ -587,7 +593,7 @@ describe('waiting on you', () => {
     const ask = spectrum.ask('bash', call)
     steps(spectrum, bars, GRACE - FRAME_MS)
     expect(spectrum.cue).toBe(0)
-    expect(spectrum.waitedFor).toBeUndefined()
+    expect(spectrum.waitedFor()).toBeUndefined()
 
     steps(spectrum, bars, 3_000)
     expect(spectrum.cue).toBeGreaterThan(0.9)
@@ -645,7 +651,7 @@ describe('waiting on you', () => {
     expect(Math.max(...bar(0.05), ...bar(0.32))).toBeLessThan(0.02)
     for (let i = 0; i < 1100; i++) spectrum.step()
     expect(Math.max(...bar(0.58))).toBeLessThan(0.3)
-    expect(spectrum.tick).toBeGreaterThan(0)
+    expect(spectrum.tick()).toBeGreaterThan(0)
   })
 
   test('the wait reads as a clock', () => {
@@ -1367,13 +1373,13 @@ describe('frames', () => {
     const spectrum = new Spectrum()
     spectrum.ambient = true
     spectrum.step()
-    expect(spectrum.showMs).toBe(2 * FRAME_MS)
+    expect(spectrum.showMs()).toBe(2 * FRAME_MS)
     spectrum.step(5 * 60_000)
-    expect(spectrum.showMs).toBe(125)
+    expect(spectrum.showMs()).toBe(125)
     // Waiting on the person: the vamp keeps its pace.
     spectrum.ask('bash', undefined, 0)
     spectrum.step()
-    expect(spectrum.showMs).toBe(2 * FRAME_MS)
+    expect(spectrum.showMs()).toBe(2 * FRAME_MS)
   })
 })
 
@@ -1418,26 +1424,26 @@ describe('context', () => {
     const brightest = (cells: number[][]) => Math.max(...cells.flat().map(c => ((c >> 16) & 255) + ((c >> 8) & 255) + (c & 255)))
     spectrum.measure(80, 1, true)
     for (let i = 0; i < 100; i++) spectrum.step()
-    expect(spectrum.glint).toBeUndefined()
+    expect(spectrum.glint()).toBeUndefined()
     const still = meter()
 
     const starts: number[] = []
     for (let i = 0; i < 700; i++) {
       spectrum.step()
-      if (spectrum.glint === 0) starts.push(spectrum.now)
+      if (spectrum.glint() === 0) starts.push(spectrum.now)
     }
     // Every ten seconds, at the first frame after.
     expect(starts).toHaveLength(2)
     expect(starts[1]! - starts[0]!).toBeGreaterThanOrEqual(10_000)
     expect(starts[1]! - starts[0]!).toBeLessThan(10_000 + FRAME_MS)
 
-    for (let i = 0; i < 400 && (spectrum.glint ?? 0) < 0.4; i++) spectrum.step()
+    for (let i = 0; i < 400 && (spectrum.glint() ?? 0) < 0.4; i++) spectrum.step()
     expect(brightest(meter())).toBeGreaterThan(brightest(still) + 100)
     for (let i = 0; i < 30; i++) spectrum.step()
     expect(meter()).toEqual(still)
 
     spectrum.measure(70)
-    expect(spectrum.glint).toBe(0)
+    expect(spectrum.glint()).toBe(0)
   })
 
   test('compacting rewinds the tape, labeled, until it is done', () => {
