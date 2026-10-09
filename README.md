@@ -11,7 +11,7 @@ A music visualizer for [Claude Code](https://claude.com/claude-code). A spectrum
 ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ▆▆ ▅▅ ▃▃ ▃▃ ▄▄ ▄▄ ▆▆ ██ ██ ██
 ```
 
-While Claude thinks, a brainwave wanders above the bars, never the same twice, and each spark of thought sends a spike along it:
+While Claude thinks, a brainwave wanders above the bars, never the same twice, and each spark of thought sends a spike along it, in from either side:
 
 ```
 thinking⢤⣀  ⢀⣠⠖⠋⠉⠉⠳⢤⡀     ⢀⣀⣀        ⢀⣀⣀                ⣠⠖⠒⠲⢤⡀    ⢀⣠⠤⠤⣄⡀

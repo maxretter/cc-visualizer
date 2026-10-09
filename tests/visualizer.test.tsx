@@ -337,33 +337,37 @@ describe('thinking', () => {
     expect(Math.max(...gaps) - Math.min(...gaps)).toBeGreaterThan(10)
   })
 
-  test('a spark runs along the brainwave as a spike, then is gone', () => {
-    // Two spectra thinking alike, one of which sparks.
-    const quiet = new Spectrum()
-    const sparked = new Spectrum()
-    const steps = (n: number) => {
-      for (let i = 0; i < n; i++) for (const spectrum of [quiet, sparked]) spectrum.step()
-    }
-    for (const spectrum of [quiet, sparked]) spectrum.beginThinking()
-    steps(30)
-    sparked.spark()
-    // The columns where the two brainwaves differ: the spike, and around it.
-    const spike = () => {
-      const a = text(new Bars(80, 4).paint('instrument', quiet), 80)
-      const b = text(new Bars(80, 4).paint('instrument', sparked), 80)
-      const columns: number[] = []
-      for (let c = 0; c < 80; c++) if (a.some((row, r) => row[c] !== b[r]![c])) columns.push(c)
-      return columns
-    }
-    const middle = (columns: number[]) => columns.reduce((sum, c) => sum + c, 0) / columns.length
+  test('a spark runs along the brainwave as a spike, in from either side, then is gone', () => {
+    for (const isFromRight of [false, true]) {
+      // Two spectra thinking alike, one of which sparks.
+      const quiet = new Spectrum()
+      const sparked = new Spectrum()
+      const steps = (n: number) => {
+        for (let i = 0; i < n; i++) for (const spectrum of [quiet, sparked]) spectrum.step()
+      }
+      for (const spectrum of [quiet, sparked]) spectrum.beginThinking()
+      steps(30)
+      sparked.spark(0.3, isFromRight)
+      // The columns where the two brainwaves differ: the spike, and around it.
+      const spike = () => {
+        const a = text(new Bars(80, 4).paint('instrument', quiet), 80)
+        const b = text(new Bars(80, 4).paint('instrument', sparked), 80)
+        const columns: number[] = []
+        for (let c = 0; c < 80; c++) if (a.some((row, r) => row[c] !== b[r]![c])) columns.push(c)
+        return columns
+      }
+      const middle = (columns: number[]) => columns.reduce((sum, c) => sum + c, 0) / columns.length
+      // A third of the way in, then two thirds, from its side.
+      const at = (share: number) => (isFromRight ? 1 - share : share) * 80
 
-    steps(9)
-    expect(spike().length).toBeGreaterThan(0)
-    expect(Math.abs(middle(spike()) - 0.33 * 80)).toBeLessThan(8)
-    steps(9)
-    expect(Math.abs(middle(spike()) - 0.66 * 80)).toBeLessThan(8)
-    steps(12)
-    expect(spike()).toEqual([])
+      steps(9)
+      expect(spike().length).toBeGreaterThan(0)
+      expect(Math.abs(middle(spike()) - at(0.33))).toBeLessThan(8)
+      steps(9)
+      expect(Math.abs(middle(spike()) - at(0.66))).toBeLessThan(8)
+      steps(12)
+      expect(spike()).toEqual([])
+    }
   })
 
   test('thinking is named in the trail and over its band', () => {

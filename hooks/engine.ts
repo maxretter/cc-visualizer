@@ -199,8 +199,8 @@ export class Spectrum {
   restless = 0
   /** Where the thinking's band wanders: its level, the level it heads for, and when it turns for another. */
   private readonly thought = { level: 0, target: 0, turnAt: 0 }
-  /** When the thinking's latest sparks fired, oldest first: each runs along the brainwave as a spike. */
-  readonly sparks: number[] = []
+  /** The thinking's latest sparks, oldest first: when each fired, and from which side its spike runs along the brainwave. */
+  readonly sparks: { at: number; isFromRight: boolean }[] = []
   /** The music's clock: how long it has played, which stands still while the frames stop. */
   now = 0
   /** How far the animation moved at the last step: its length, up to `MAX_STEP`. */
@@ -482,7 +482,7 @@ export class Spectrum {
     if (t - this.glintAt >= GLINT_EVERY) this.glintAt = t
     this.crash = this.crash < 0.004 ? 0 : this.crash * fade(275, ms)
     this.flash = this.flash < 0.01 ? 0 : this.flash * fade(220, ms)
-    while (this.sparks.length > 0 && t - this.sparks[0]! >= SPIKE) this.sparks.shift()
+    while (this.sparks.length > 0 && t - this.sparks[0]!.at >= SPIKE) this.sparks.shift()
     // The typed notes ring from when they come in.
     for (let i = this.notes.length - 1; i >= 0; i--) {
       const note = this.notes[i]!
@@ -515,15 +515,15 @@ export class Spectrum {
     }
     thought.level = ease(thought.level, thought.target, 110, ms)
     const sparks = SPARKS * (1 + this.restless / 0.45)
-    if (this.rand() < 1 - Math.exp((-sparks * ms) / 1000)) this.spark(0.15 + 0.3 * this.rand())
+    if (this.rand() < 1 - Math.exp((-sparks * ms) / 1000)) this.spark(0.15 + 0.3 * this.rand(), this.rand() < 0.5)
     const i = INDEX.think
     this.level[i] = Math.max(this.level[i]!, thought.level)
   }
 
-  /** A thought sparks: a flick on the thinking's band, and a spike running along the brainwave. */
-  spark(strength = 0.3) {
+  /** A thought sparks: a flick on the thinking's band, and a spike running along the brainwave, in from the left or the right. */
+  spark(strength = 0.3, isFromRight = false) {
     this.hit('think', strength)
-    this.sparks.push(this.now)
+    this.sparks.push({ at: this.now, isFromRight })
   }
 
   /** The idle show moves on by `ms`: its scenes, and the rain while it falls. */
@@ -1290,9 +1290,9 @@ export class Bars {
     for (let x = 0; x < dotColumns; x++) {
       const u = x / dotColumns
       let wave = waves[x]! - mean
-      for (const at of sparks) {
+      for (const { at, isFromRight } of sparks) {
         const run = (now - at) / SPIKE
-        if (run >= 0 && run < 1) wave -= 1.6 * (1 - run) * bump(u - run, 0.018)
+        if (run >= 0 && run < 1) wave -= 1.6 * (1 - run) * bump(u - (isFromRight ? 1 - run : run), 0.018)
       }
       const y = Math.max(0, Math.min(dotRows - 1, Math.round(middle + reach * wave)))
       const from = previous ?? y
