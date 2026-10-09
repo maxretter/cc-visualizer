@@ -90,8 +90,8 @@ const SCAN = 240
 /** Frames the demo thinks before the drums come in. */
 const DEMO_THINK = 75
 /**
- * Frames an ask waits before the vamp: in auto mode a classifier settles most
- * asks first, and the vamp is for the ones that reach the person.
+ * Frames an ask waits before the vamp: a hook may answer a permission request
+ * on its own, and the vamp is for the ones the person answers.
  */
 export const GRACE = 45
 /** Frames a beat of the vamp lasts (100 bpm), and the frames it plays before its pulses shrink. */

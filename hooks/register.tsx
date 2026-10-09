@@ -65,6 +65,22 @@ type Site = {
 
 type Mount = { layout?: Layout; labels?: boolean; names?: Site['names'] }
 
+/** A tool call put to the mode's decider: its tool, its loop and its input, to know its permission request by. */
+type Check = { tool: string; agentId?: string; input?: string }
+
+/** A tool's input as text, to tell calls of one tool apart by. */
+const inputKey = (input: unknown): string | undefined => {
+  try {
+    return JSON.stringify(input)
+  } catch {
+    return undefined
+  }
+}
+
+/** The prefs as saved, or none: the store holds whatever an older version, or another session, left there. */
+const prefsOf = (saved: unknown): Record<string, unknown> =>
+  typeof saved === 'object' && saved !== null ? (saved as Record<string, unknown>) : {}
+
 type Context = { tokens?: number; window: number; percent?: number }
 
 /** The context window, and where auto-compact runs in it as a share of it (1 when it is off). */
@@ -89,8 +105,10 @@ export const register: Register = on => {
   // The animation is the module's own: a reload starts it from silence.
   const spectrum = new Spectrum()
   const sites = new Map<string, Site>()
-  // Tool calls by their id while they run, and the ones put to the person until answered.
+  // Tool calls by their id while they run, the ones before the mode's decider,
+  // and the ones put to the person until answered.
   const calls = new Map<string, Call>()
+  const checks = new Map<string, Check>()
   const asks = new Map<string, Ask>()
   // The context window's size, and where auto-compact runs in it (1 when it is off).
   let windowSize: number | undefined
@@ -109,9 +127,10 @@ export const register: Register = on => {
   // A drawing stays up once all is quiet: the pane, or the band shown always.
   const isAmbient = () => idleNow && (sites.has(PANE) || (modeNow === 'always' && sites.size > 0))
 
-  // An ask answered; `answer` wakes the frames too, which a drawing may not do
-  // (it writes state), so a drawing settles it and the frames notice.
+  // A call decided, its ask answered; `answer` wakes the frames too, which a
+  // drawing may not do (it writes state), so a drawing settles it and the frames notice.
   const settle = (id: string): boolean => {
+    checks.delete(id)
     const ask = asks.get(id)
     if (ask === undefined) return false
     asks.delete(id)
@@ -209,8 +228,7 @@ export const register: Register = on => {
       argumentHint: '[auto|always|off|bar|mini|pos <above|below>|pane|demo|idle|theme <name>]',
       immediate: true,
     })
-    const saved = await $.store.get('prefs')
-    const prefs = typeof saved === 'object' && saved !== null ? (saved as Record<string, unknown>) : {}
+    const prefs = prefsOf(await $.store.get('prefs'))
     const savedMode = prefs.mode
     const savedTheme = prefs.theme
     const savedSize = prefs.size
@@ -268,6 +286,8 @@ export const register: Register = on => {
         else if (chunk.kind === 'thinking') spectrum.stream('think', chunk.text.length, gain)
         else if (chunk.kind === 'tool') spectrum.hit(sourceOf(chunk.name), 0.8 * gain)
         else if (chunk.kind === 'input') spectrum.stream('args', chunk.json.length, gain)
+        // The frames may have stopped in a lull mid-stream.
+        wake()
         yield chunk
       }
     } finally {
@@ -275,7 +295,7 @@ export const register: Register = on => {
     }
   })
 
-  // A tool runs: a hit, its name, a held note until it returns; an error flashes red.
+  // A tool runs: a hit, its name, a held note until it returns.
   on('tool.call', async ($, e, next) => {
     const call = spectrum.startCall(String(e.tool))
     const id = e.tool_use_id
@@ -285,10 +305,7 @@ export const register: Register = on => {
     }
     wake()
     try {
-      const ran = await next(e)
-      if (ran.deny === undefined && ran.isError === true) spectrum.error()
-
-      return ran
+      return await next(e)
     } finally {
       if (id !== undefined) {
         calls.delete(id)
@@ -298,19 +315,54 @@ export const register: Register = on => {
     }
   }).catch(($, e, next) => next(e))
 
-  // A tool call put to the person: unless an answer comes within the grace
-  // (auto mode's classifier settles most), its held note rests and the vamp
-  // plays until it is answered. A hook that fails leaves the verdict as it was.
+  // A tool that ran and failed flashes red. A call refused (at the dialog, by a
+  // rule or by auto mode) or cut by an interrupt never ran: core marks it an
+  // error too, but this is not raised for it.
+  on('classic.PostToolUseFailure', ($, e, next) => {
+    if (e.is_interrupt !== true) {
+      spectrum.error()
+      wake()
+    }
+
+    return next(e)
+  })
+
+  // A tool call put to the mode's decider, which is not always the person: auto
+  // mode's classifier settles most, and the ones it hands on raise a permission
+  // request. A hook that fails leaves the verdict as it was.
   on('tool.check', async ($, e, next) => {
     const verdict = await next(e)
     const id = e.tool_use_id
     if (verdict.decision === 'ask' && id !== undefined && !asks.has(id)) {
-      const call = calls.get(id)
-      asks.set(id, spectrum.ask(call?.source ?? sourceOf(e.tool), call))
-      wake()
+      checks.set(id, { tool: e.tool, agentId: e.agentId, input: inputKey(e.input) })
     }
 
     return verdict
+  })
+
+  // The person is asked: unless an answer comes within the grace (a hook's),
+  // its held note rests and the vamp plays until it is answered. The request
+  // names no call, so it is the oldest checked with its tool, loop and input,
+  // else with its tool and loop. A hook that fails leaves the request to the rest.
+  on('classic.PermissionRequest', ($, e, next) => {
+    const key = inputKey(e.tool_input)
+    let id: string | undefined
+    for (const [checked, check] of checks) {
+      if (check.tool !== e.tool_name || check.agentId !== e.agent_id) continue
+      id ??= checked
+      if (check.input === key) {
+        id = checked
+        break
+      }
+    }
+    if (id !== undefined) {
+      checks.delete(id)
+      const call = calls.get(id)
+      asks.set(id, spectrum.ask(call?.source ?? sourceOf(e.tool_name), call))
+      wake()
+    }
+
+    return next(e)
   })
 
   // A tool's progress row shows once it runs: the ask was answered.
@@ -477,10 +529,11 @@ export const register: Register = on => {
   on('command.run', { command: 'viz' }, async ($, e) => {
     const [verb = '', arg = ''] = e.args.trim().toLowerCase().split(/\s+/)
     const was = await read($, mode)
+    const before = { mode: was, theme: await read($, theme), size: await read($, size), place: await read($, place), idle: idleNow }
     let m = was
-    let t = await read($, theme)
-    let z = await read($, size)
-    let p = await read($, place)
+    let t = before.theme
+    let z = before.size
+    let p = before.place
     let text: string
 
     if (verb === 'pos') {
@@ -556,7 +609,13 @@ export const register: Register = on => {
     await update($, theme, () => t)
     await update($, size, () => z)
     await update($, place, () => p)
-    await $.store.set('prefs', { mode: m, theme: t, size: z, place: p, idle: idleNow })
+    // Save what this command changed over what is saved: another session may
+    // have saved the rest since this one read it.
+    const after = { mode: m, theme: t, size: z, place: p, idle: idleNow }
+    const changed = Object.fromEntries(Object.entries(after).filter(([k, v]) => before[k as keyof typeof before] !== v))
+    if (Object.keys(changed).length > 0) {
+      await $.store.set('prefs', { ...prefsOf(await $.store.get('prefs')), ...changed })
+    }
     wake()
 
     return { text }

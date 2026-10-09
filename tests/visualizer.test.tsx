@@ -1,5 +1,6 @@
-import type { On } from 'claude-code'
+import type { On, ToolCallResult } from 'claude-code'
 import { describe, expect, mock, test } from 'claude-code/testing'
+import type { Engine } from 'claude-code/testing'
 
 import { Bars, GRACE, Spectrum, clockText, idleText, shortName, sourceOf, trail } from '../hooks/engine'
 
@@ -44,6 +45,70 @@ const band = (isWorking: boolean) => ({
     view: {},
   },
 })
+
+/** A store that keeps the prefs written to it, each write in turn, starting from `initial`. */
+const prefsStore = (on: On, initial?: Record<string, unknown>) => {
+  const saved: unknown[] = initial === undefined ? [] : [initial]
+  on('store.get', ($, e) => ({ value: e.key === 'prefs' ? saved.at(-1) : undefined }))
+  on('store.set', ($, e) => {
+    if (e.key === 'prefs') saved.push(e.value)
+
+    return { value: undefined }
+  })
+  return saved
+}
+
+/**
+ * A session with the band above the prompt while Claude works, in `mode`, and
+ * its frames kept: tool calls run until the test finishes them, and each check
+ * beneath asks.
+ */
+const staged = async ($: Engine, on: On, mode = 'always') => {
+  const clock = mock.clock(on)
+  mock.store(on)
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('command.register', ($, e) => ({ value: { command: e.name } }))
+  on('command.run', () => ({ text: '' }))
+  on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+
+    return <Text>engine</Text>
+  })
+  on('ui.render', { component: 'ToolProgress' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+
+    return <Text>{e.props.hint}</Text>
+  })
+  const drawn = new Map<string, string>()
+  let blits = 0
+  on('ui.blit', ($, e) => {
+    if ('cells' in e) drawn.set(e.key, e.cells)
+    blits += 1
+
+    return { value: {} }
+  })
+  const running = new Map<string, (ran: ToolCallResult) => void>()
+  on('tool.call', ($, e) => new Promise<ToolCallResult>(resolve => running.set(e.tool_use_id ?? '', resolve)))
+  on('tool.check', () => ({ decision: 'ask' as const }))
+  on('classic.PermissionRequest', () => ({}))
+  on('classic.PostToolUseFailure', () => ({}))
+
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.command.run({ command: 'viz', args: mode, origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 80 } })
+  const ui = await $.ui.mount(band(true))
+  return {
+    clock,
+    ui,
+    /** The band's cells as last drawn. */
+    cells: () => drawn.get('band') ?? '',
+    /** The band's top row, where its labels go. */
+    label: () => text(drawn.get('band') ?? '', 80)[0] ?? '',
+    /** How many frames were sent. */
+    blits: () => blits,
+    /** Ends a running call, as the tool answered. */
+    finish: (id: string, ran: ToolCallResult = { result: 'done' }) => running.get(id)?.(ran),
+  }
+}
 
 describe('engine', () => {
   test('tools land on their instruments', () => {
@@ -303,12 +368,7 @@ describe('idle', () => {
 
   test('/viz idle toggles the show and remembers it', async ($, on) => {
     on('command.run', () => ({ text: '' }))
-    const saved: unknown[] = []
-    on('store.set', ($, e) => {
-      if (e.key === 'prefs') saved.push(e.value)
-
-      return { value: undefined }
-    })
+    const saved = prefsStore(on)
 
     expect((await $.command.run(run('idle'))).text).toContain('off')
     expect(saved.at(-1)).toMatchObject({ idle: false })
@@ -322,12 +382,6 @@ describe('idle', () => {
 })
 
 describe('waiting on you', () => {
-  const run = (args: string) => ({
-    command: 'viz',
-    args,
-    origin: { kind: 'composer' as const },
-    presentation: { isFullscreen: true, columns: 80 },
-  })
   const steps = (spectrum: Spectrum, bars: Bars, n: number) => {
     for (let i = 0; i < n; i++) {
       spectrum.step()
@@ -409,38 +463,11 @@ describe('waiting on you', () => {
   })
 
   test('a permission ask vamps on the band until the call runs', async ($, on) => {
-    const clock = mock.clock(on)
-    mock.store(on)
-    on('session.start', ($, e) => ({ cwd: e.cwd }))
-    on('command.register', ($, e) => ({ value: { command: e.name } }))
-    on('command.run', () => ({ text: '' }))
-    on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
-      const { Text } = $.ui.resolve(e)
-
-      return <Text>engine</Text>
-    })
-    const drawn = new Map<string, string>()
-    on('ui.render', { component: 'ToolProgress' }, ($, e) => {
-      const { Text } = $.ui.resolve(e)
-
-      return <Text>{e.props.hint}</Text>
-    })
-    on('ui.blit', ($, e) => {
-      if ('cells' in e) drawn.set(e.key, e.cells)
-
-      return { value: {} }
-    })
-    let finish = () => {}
-    on('tool.call', () => new Promise(resolve => (finish = () => resolve({ result: 'done' }))))
-    on('tool.check', () => ({ decision: 'ask' as const }))
-    const label = () => text(drawn.get('band') ?? '', 80)[0] ?? ''
-
-    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-    await $.command.run(run('always'))
-    const ui = await $.ui.mount(band(true))
+    const { clock, ui, label, finish } = await staged($, on)
     const call = $.tool.call({ tool: 'Bash', command: 'ls', tool_use_id: 't1' })
     await clock.settle()
     await $.tool.check({ tool: 'Bash', input: { command: 'ls' }, tool_use_id: 't1' })
+    await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: { command: 'ls' } })
     await clock.advance(1000)
     expect(label()).toContain('Bash')
     expect(label()).not.toContain('waiting on you')
@@ -457,8 +484,109 @@ describe('waiting on you', () => {
     })
     await clock.advance(1000)
     expect(label()).not.toContain('waiting on you')
-    finish()
+    finish('t1')
     await call
+    await ui.unmount()
+  })
+
+  test('an ask the mode settles on its own never vamps, as auto mode settles most', async ($, on) => {
+    const { clock, ui, label, finish } = await staged($, on)
+    // A background subagent's call the classifier lets run: no progress row shows for it here.
+    const call = $.tool.call({ tool: 'Bash', command: 'make test', tool_use_id: 't1' })
+    await clock.settle()
+    await $.tool.check({ tool: 'Bash', input: { command: 'make test' }, tool_use_id: 't1', agentId: 'a1' })
+    await clock.advance(5000)
+    expect(label()).toContain('Bash')
+    expect(label()).not.toContain('waiting on you')
+    finish('t1')
+    await call
+    await ui.unmount()
+  })
+
+  test('a permission request vamps the call it was raised for', async ($, on) => {
+    const { clock, ui, label, finish } = await staged($, on)
+    const first = $.tool.call({ tool: 'Bash', command: 'ls', tool_use_id: 't1' })
+    const second = $.tool.call({ tool: 'Bash', command: 'rm -r build', tool_use_id: 't2' })
+    await clock.settle()
+    await $.tool.check({ tool: 'Bash', input: { command: 'ls' }, tool_use_id: 't1' })
+    await $.tool.check({ tool: 'Bash', input: { command: 'rm -r build' }, tool_use_id: 't2' })
+    await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: { command: 'rm -r build' } })
+    await clock.advance(3000)
+    expect(label()).toMatch(/^\s*waiting on you/)
+
+    // The call the classifier let run ends; the one put to the person still waits.
+    finish('t1')
+    await first
+    await clock.advance(1000)
+    expect(label()).toMatch(/^\s*waiting on you/)
+    finish('t2')
+    await second
+    await clock.advance(1000)
+    expect(label()).not.toContain('waiting on you')
+    await ui.unmount()
+  })
+})
+
+describe('errors', () => {
+  test('a tool that fails flashes the bars red; a call refused or interrupted never ran, and does not', async ($, on) => {
+    const { clock, ui, cells, finish } = await staged($, on)
+    // How red the bars are: red over green, on average over the cells drawn.
+    const redness = () => {
+      const drawn = colors(cells(), 80)
+        .flat()
+        .filter(c => c !== 0)
+      return drawn.reduce((sum, c) => sum + ((c >> 16) & 0xff) - ((c >> 8) & 0xff), 0) / Math.max(1, drawn.length)
+    }
+    // A Bash call that ends in an error, the failure raised when it ran: how red the bars are just after.
+    const end = async (id: string, failure?: { is_interrupt?: boolean }) => {
+      const call = $.tool.call({ tool: 'Bash', command: 'make', tool_use_id: id })
+      await clock.settle()
+      if (failure !== undefined) {
+        await $.classic.PostToolUseFailure({ tool_name: 'Bash', tool_input: { command: 'make' }, tool_use_id: id, error: 'Exit code 2', ...failure })
+      }
+      finish(id, { result: 'Exit code 2', isError: true })
+      await call
+      await clock.advance(100)
+      const red = redness()
+      await clock.advance(3000)
+      return red
+    }
+
+    const refused = await end('t1')
+    const failed = await end('t2', {})
+    const interrupted = await end('t3', { is_interrupt: true })
+    expect(failed).toBeGreaterThan(refused + 30)
+    expect(interrupted).toBeLessThan(failed - 30)
+    await ui.unmount()
+  })
+})
+
+describe('streaming', () => {
+  test('text after a lull in the stream moves the bars again', async ($, on) => {
+    let resume = () => {}
+    on('turn.step', async function* ($, e) {
+      yield { kind: 'text' as const, index: 0, text: 'Let me look' }
+      await new Promise<void>(resolve => (resume = resolve))
+      yield { kind: 'text' as const, index: 0, text: ' at the code, the tests and the docs.' }
+
+      return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn' as const, usage: null }
+    })
+    const { clock, ui, blits } = await staged($, on, 'auto')
+
+    const reading = (async () => {
+      for await (const _ of $.turn.step({ turnId: 'u1', index: 0, model: 'claude-opus-5-5', messageCount: 1 })) {
+      }
+    })()
+    // The lull: the bars fall, and the frames stop.
+    await clock.advance(5000)
+    const sent = blits()
+    await clock.advance(1000)
+    expect(blits()).toBe(sent)
+
+    resume()
+    await reading
+    await clock.advance(500)
+    expect(blits()).toBeGreaterThan(sent)
     await ui.unmount()
   })
 })
@@ -663,12 +791,7 @@ describe('place', () => {
 
   test('/viz bar and /viz mini keep the place /viz pos gave, and it is remembered', async ($, on) => {
     engine(on)
-    const saved: unknown[] = []
-    on('store.set', ($, e) => {
-      if (e.key === 'prefs') saved.push(e.value)
-
-      return { value: undefined }
-    })
+    const saved = prefsStore(on)
 
     await $.command.run(run('mini'))
     expect((await $.command.run(run('pos below'))).text).toBe('Visualizer below the prompt.')
@@ -678,6 +801,21 @@ describe('place', () => {
     // No place given: the other one.
     expect((await $.command.run(run('pos'))).text).toBe('Visualizer above the prompt.')
     expect(saved.at(-1)).toMatchObject({ size: 'bar', place: 'above' })
+  })
+
+  test('/viz saves only what it changed, over what another session saved since', async ($, on) => {
+    engine(on)
+    const saved = prefsStore(on)
+
+    await $.command.run(run('mini'))
+    // Another session picks a theme after this one read its prefs.
+    saved.push({ ...(saved.at(-1) as object), theme: 'synthwave' })
+    await $.command.run(run('pos below'))
+    expect(saved.at(-1)).toMatchObject({ size: 'mini', place: 'below', theme: 'synthwave' })
+    // A command that changes nothing saves nothing.
+    const writes = saved.length
+    await $.command.run(run('pos below'))
+    expect(saved).toHaveLength(writes)
   })
 
   test('/viz pos says where it cannot go', async ($, on) => {
