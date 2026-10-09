@@ -2,7 +2,7 @@ import type { On, ToolCallResult } from 'claude-code'
 import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
-import { Bars, GRACE, Spectrum, clockText, idleText, shortName, sourceOf, trail } from '../hooks/engine'
+import { BEAT, Bars, FRAME_MS, GRACE, Spectrum, clockText, idleText, shortName, sourceOf, trail } from '../hooks/engine'
 
 /** The glyphs of Raster cells, row by row. */
 const text = (cells: string, columns: number): string[] => {
@@ -157,6 +157,46 @@ describe('engine', () => {
       expect(bars.paint(theme, spectrum, true).length).toBe((37 * 5 * 12 * 4) / 3)
       expect(bars.legend(theme).length).toBe((37 * 12 * 4) / 3)
     }
+  })
+})
+
+describe('time', () => {
+  test('the music keeps time at any frame rate', () => {
+    // A prompt's sweep, an error's flash, thinking, the meter filling: 600 ms of it at 60, 30 and 15 ms a frame.
+    const played = (step: number) => {
+      const spectrum = new Spectrum()
+      spectrum.kick()
+      spectrum.error()
+      spectrum.beginThinking()
+      spectrum.measure(60)
+      for (let t = 0; t < 600; t += step) spectrum.step(step)
+      return spectrum
+    }
+    const full = played(30)
+    for (const other of [played(60), played(15)]) {
+      expect(other.now).toBe(600)
+      const reads: ((s: Spectrum) => number)[] = [s => s.flash, s => s.mind, s => s.gauge, s => s.at(0.9)]
+      for (const read of reads) {
+        expect(Math.abs(read(other) - read(full))).toBeLessThan(1e-6)
+      }
+    }
+    // The sweep crossed the spectrum at its own speed, not a step's.
+    expect(full.at(0.9)).toBeGreaterThan(full.at(0.6) + 0.5)
+  })
+
+  test('a long gap moves the clocks, not the bars', () => {
+    const spectrum = new Spectrum()
+    const bars = new Bars(80, 4)
+    spectrum.ask('bash', spectrum.startCall('Bash'))
+    spectrum.step()
+    bars.step(spectrum)
+    // The laptop sleeps through ten minutes of waiting.
+    spectrum.step(600_000)
+    bars.step(spectrum)
+    expect(spectrum.dt).toBe(250)
+    expect(clockText(spectrum.waitedFor!)).toBe('10:00')
+    const [, bottom] = text(trail(spectrum, 'instrument', 50, 2), 50)
+    expect(bottom).toContain('waiting on you · 10:00')
   })
 })
 
@@ -350,8 +390,8 @@ describe('idle', () => {
 
   test('idle is named, with how long it has been', () => {
     expect(idleText(0)).toBe('idle')
-    expect(idleText(Math.ceil(240_000 / 33))).toBe('idle 4m')
-    expect(idleText(Math.ceil(3_900_000 / 33))).toBe('idle 1h 5m')
+    expect(idleText(240_000)).toBe('idle 4m')
+    expect(idleText(3_900_000)).toBe('idle 1h 5m')
 
     const spectrum = new Spectrum()
     spectrum.ambient = true
@@ -382,8 +422,9 @@ describe('idle', () => {
 })
 
 describe('waiting on you', () => {
-  const steps = (spectrum: Spectrum, bars: Bars, n: number) => {
-    for (let i = 0; i < n; i++) {
+  /** Plays `ms` of music, a frame at a time. */
+  const steps = (spectrum: Spectrum, bars: Bars, ms: number) => {
+    for (let t = 0; t < ms; t += FRAME_MS) {
       spectrum.step()
       bars.step(spectrum)
     }
@@ -394,11 +435,11 @@ describe('waiting on you', () => {
     const bars = new Bars(80, 4, { width: 2, gap: 1 })
     const call = spectrum.startCall('Bash')
     const ask = spectrum.ask('bash', call)
-    steps(spectrum, bars, GRACE - 1)
+    steps(spectrum, bars, GRACE - FRAME_MS)
     expect(spectrum.cue).toBe(0)
     expect(spectrum.waitedFor).toBeUndefined()
 
-    steps(spectrum, bars, 90)
+    steps(spectrum, bars, 3_000)
     expect(spectrum.cue).toBeGreaterThan(0.9)
     expect(spectrum.isResting()).toBe(false)
     // Only the vamp plays: the frames can slow down.
@@ -411,7 +452,7 @@ describe('waiting on you', () => {
     expect(bottom?.trimEnd()).toMatch(/ Bash \u00b7 waiting on you \u00b7 0:04$/)
 
     spectrum.answer(ask)
-    steps(spectrum, bars, 40)
+    steps(spectrum, bars, 1_300)
     expect(spectrum.cue).toBe(0)
     expect(spectrum.isCalm()).toBe(false)
     expect(text(bars.paint('instrument', spectrum, true), 80)[0]).not.toContain('waiting')
@@ -421,7 +462,7 @@ describe('waiting on you', () => {
     const spectrum = new Spectrum()
     const ask = spectrum.ask('edit', spectrum.startCall('Edit'))
     let most = 0
-    for (let i = 0; i < GRACE - 5; i++) {
+    for (let t = 0; t < GRACE - 5 * FRAME_MS; t += FRAME_MS) {
       spectrum.step()
       most = Math.max(most, spectrum.cue)
     }
@@ -437,10 +478,11 @@ describe('waiting on you', () => {
     const spectrum = new Spectrum()
     spectrum.ask('bash', undefined, 0)
     for (let i = 0; i < 200; i++) spectrum.step()
+    // A bar of four beats, in steps that land on each beat.
     const bar = (x: number) => {
       const levels: number[] = []
-      for (let i = 0; i < 72; i++) {
-        spectrum.step()
+      for (let t = 0; t < 4 * BEAT; t += 25) {
+        spectrum.step(25)
         levels.push(spectrum.at(x))
       }
       return levels
@@ -458,8 +500,8 @@ describe('waiting on you', () => {
 
   test('the wait reads as a clock', () => {
     expect(clockText(0)).toBe('0:00')
-    expect(clockText(Math.ceil(42_000 / 33))).toBe('0:42')
-    expect(clockText(Math.ceil(3_723_000 / 33))).toBe('1:02:03')
+    expect(clockText(42_000)).toBe('0:42')
+    expect(clockText(3_723_000)).toBe('1:02:03')
   })
 
   test('a permission ask vamps on the band until the call runs', async ($, on) => {
@@ -688,10 +730,12 @@ describe('context', () => {
     const starts: number[] = []
     for (let i = 0; i < 700; i++) {
       spectrum.step()
-      if (spectrum.glint === 0) starts.push(spectrum.frame)
+      if (spectrum.glint === 0) starts.push(spectrum.now)
     }
+    // Every ten seconds, at the first frame after.
     expect(starts).toHaveLength(2)
-    expect(starts[1]! - starts[0]!).toBe(300)
+    expect(starts[1]! - starts[0]!).toBeGreaterThanOrEqual(10_000)
+    expect(starts[1]! - starts[0]!).toBeLessThan(10_000 + FRAME_MS)
 
     for (let i = 0; i < 400 && (spectrum.glint ?? 0) < 0.4; i++) spectrum.step()
     expect(brightest(meter())).toBeGreaterThan(brightest(still) + 100)

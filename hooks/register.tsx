@@ -17,10 +17,10 @@ const wide = (columns: number): Layout => ({ width: columns >= 30 ? 2 : 1, gap: 
 const PERSON = new Set(['AskUserQuestion', 'ExitPlanMode'])
 /** The most columns the tool names beside the mini spectrum take. */
 const MINI_NAMES = 56
-/** While only the idle show plays, frames come this many times slower, each moving it as far. */
-const IDLE_STEPS = 2
-/** Frames between tries at a drawing whose frames the engine refuses (half a second). */
-const RETRY = 15
+/** How often a frame is drawn while only a show plays (the idle show, the vamp): half the full rate. */
+const SHOW_MS = 2 * FRAME_MS
+/** How long between tries at a drawing whose frames the engine refuses. */
+const RETRY = 500
 const MODES: readonly VizMode[] = ['auto', 'always', 'off']
 const SIZES: readonly VizSize[] = ['bar', 'mini']
 const PLACES: readonly VizPlace[] = ['above', 'below']
@@ -59,7 +59,7 @@ type Site = {
   bars: Bars
   labels: boolean
   names?: { key: string; columns: number; rows: number }
-  /** While the engine refuses its frames (a dialog took its place): the frame to try again at. */
+  /** While the engine refuses its frames (a dialog took its place): when to try again, on the music's clock. */
   retryAt?: number
 }
 
@@ -115,6 +115,11 @@ export const register: Register = on => {
   let limit = 1
   let ticker: Timer | undefined
   let tempo = FRAME_MS
+  // Which ticker's ticks count (not one replaced or stopped, still in flight),
+  // and when the last frame was: none after a stop, so the music's clock
+  // stands still while nothing plays.
+  let ticks = 0
+  let last: number | undefined
   let modeNow: VizMode = 'auto'
   let themeNow: VizTheme = 'instrument'
   let idleNow = true
@@ -166,7 +171,7 @@ export const register: Register = on => {
     // the band off screen, and the engine shows it again as it was, without a
     // new render, so only a frame that lands brings it back to life.
     const hold = (site: Site) => {
-      site.retryAt = spectrum.frame + RETRY
+      site.retryAt = spectrum.now + RETRY
     }
     const blit = (site: Site, key: string, cells: string) => {
       void $.ui.blit({ requestId: site.requestId, key, cells }).then(
@@ -179,18 +184,36 @@ export const register: Register = on => {
     }
     const run = (ms: number) => {
       if (ticker !== undefined && tempo === ms) return
+      if (ticker === undefined) last = undefined
       ticker?.cancel()
       tempo = ms
-      ticker = $.clock.every(ms, frame)
+      const own = ++ticks
+      ticker = $.clock.every(ms, () => tick(own))
     }
-    const frame = () => {
+    const stop = () => {
+      ticker?.cancel()
+      ticker = undefined
+      ticks += 1
+    }
+    // A tick reads the clock and moves the music on by the time since the last
+    // frame: ticks come late when the host is busy, and the music keeps time.
+    const tick = (own: number) => {
+      void $.clock.now().then(
+        now => {
+          if (own !== ticks) return
+          const elapsed = last === undefined ? tempo : now - last
+          last = now
+          frame(elapsed)
+        },
+        () => {},
+      )
+    }
+    const frame = (elapsed: number) => {
       spectrum.ambient = isAmbient()
-      for (let k = tempo === FRAME_MS ? 1 : IDLE_STEPS; k > 0; k--) {
-        spectrum.step()
-        for (const site of sites.values()) site.bars.step(spectrum)
-      }
+      spectrum.step(elapsed)
+      for (const site of sites.values()) site.bars.step(spectrum)
       for (const site of sites.values()) {
-        if (site.retryAt !== undefined && spectrum.frame < site.retryAt) continue
+        if (site.retryAt !== undefined && spectrum.now < site.retryAt) continue
         blit(site, site.key, site.bars.paint(themeNow, spectrum, site.labels))
         if (site.names) blit(site, site.names.key, trail(spectrum, themeNow, site.names.columns, site.names.rows))
       }
@@ -204,10 +227,9 @@ export const register: Register = on => {
       // does: stop once the bars have fallen.
       if (spectrum.ambient || !spectrum.isResting()) {
         if (tempo !== FRAME_MS) return
-        run(FRAME_MS * IDLE_STEPS)
+        run(SHOW_MS)
       } else if (spectrum.isQuiet() && [...sites.values()].every(site => site.bars.isSettled())) {
-        ticker?.cancel()
-        ticker = undefined
+        stop()
       } else {
         return
       }
@@ -219,7 +241,7 @@ export const register: Register = on => {
       void update($, isPlaying, () => true)
     }
     rest = () => {
-      if (ticker === undefined && isAmbient()) run(FRAME_MS * IDLE_STEPS)
+      if (ticker === undefined && isAmbient()) run(SHOW_MS)
     }
 
     await $.command.register({

@@ -3,12 +3,28 @@
 // Each kind of activity is an instrument with a place on the spectrum, low to
 // high. Events feed energy into their instrument (a tool call is a drum hit,
 // streamed text a sustained tone, a tool still running a held note), the
-// energy decays every frame, and `Bars` turns the spectrum into bars with
-// falling peak caps, packed as `Raster` cells. Pure: no `$`, so it tests alone.
+// energy dies away, and `Bars` turns the spectrum into bars with falling peak
+// caps, packed as `Raster` cells. Pure: no `$`, so it tests alone.
+//
+// It moves by time, not by frames: each step is told how long it has been, so
+// the music plays the same at any frame rate, and every duration, half-life
+// and period here is in milliseconds.
 
 import type { VizTheme } from '../types'
 
+/** How often a frame is drawn while something plays (30 fps): a step's length when none is given. */
 export const FRAME_MS = 33
+/** The longest the animation moves in one step: a longer gap (a stall, a sleep) moves the clocks, not the bars. */
+const MAX_STEP = 250
+
+/** What is left of something that halves every `halfLife`, after `ms`. */
+const fade = (halfLife: number, ms: number) => Math.pow(0.5, ms / halfLife)
+
+/** A value easing toward `target`, closing half the distance every `halfLife`, after `ms`. */
+const ease = (value: number, target: number, halfLife: number, ms: number) => target + (value - target) * fade(halfLife, ms)
+
+/** A wave's phase in radians, `ms` into cycles `period` long. */
+const cycle = (ms: number, period: number) => (2 * Math.PI * ms) / period
 
 export type SourceId = 'think' | 'text' | 'read' | 'edit' | 'bash' | 'web' | 'agent' | 'args'
 
@@ -31,13 +47,14 @@ export const THEME_NAMES: readonly VizTheme[] = ['instrument', 'claude', 'synthw
 const N = SOURCES.length
 const INDEX = Object.fromEntries(SOURCES.map((s, i) => [s.id, i])) as Record<SourceId, number>
 
-/** Characters of a stream that make one full hit. */
+/** Characters of a stream that make one full hit, coming in over `FRAME_MS`. */
 const SCALE: Record<SourceId, number> = {
   think: 28, text: 18, read: 1, edit: 1, bash: 1, web: 1, agent: 1, args: 48,
 }
 
 const HIT = 3
-const DECAY = 0.86
+/** How fast an instrument dies away: its energy halves every 150 ms. */
+const DECAY = 150
 const SIGMA = 0.055
 
 const READ = new Set(['Read', 'Grep', 'Glob', 'LS', 'NotebookRead', 'LSP', 'ToolSearch', 'ListMcpResourcesTool', 'ReadMcpResourceTool'])
@@ -56,11 +73,11 @@ export function sourceOf(tool: string): SourceId {
 
 const bump = (d: number, sigma: number) => Math.exp(-(d * d) / (2 * sigma * sigma))
 
-/** The idle show's swell at a point of the spectrum: a low wave rolling up it, breathing. */
-function drift(x: number, f: number): number {
-  const swell = 0.5 + 0.5 * Math.sin(2 * Math.PI * 1.4 * x - f * 0.035)
-  const ripple = 0.7 + 0.3 * Math.sin(2 * Math.PI * 2.6 * x + f * 0.022 + 1)
-  const breath = 0.8 + 0.2 * Math.sin(f * 0.019)
+/** The idle show's swell at a point of the spectrum, `ms` into the show: a low wave rolling up it, breathing. */
+function drift(x: number, ms: number): number {
+  const swell = 0.5 + 0.5 * Math.sin(2 * Math.PI * 1.4 * x - cycle(ms, 5_900))
+  const ripple = 0.7 + 0.3 * Math.sin(2 * Math.PI * 2.6 * x + cycle(ms, 9_400) + 1)
+  const breath = 0.8 + 0.2 * Math.sin(cycle(ms, 10_900))
   return 0.34 * swell * ripple * breath
 }
 
@@ -70,40 +87,48 @@ export function shortName(tool: string): string {
   return name.replace(/[^\x20-\x7e]/g, '?').slice(0, 18)
 }
 
-/** One run of calls to the same tool: its name is drawn once, `×count`. */
+/** One run of calls to the same tool: its name is drawn once, `×count`; `endedAt`, when its last run ended. */
 export type Call = { name: string; source: SourceId; count: number; running: number; endedAt: number }
 
-/** A tool call put to the person: its band, its call, the frame it was asked, and the frames before the vamp. */
+/** A tool call put to the person: its band, its call, when it was asked, and how long before the vamp. */
 export type Ask = { source: SourceId; call?: Call; at: number; grace: number }
 
-/** Frames a finished call's name stays at full strength, then fades over. */
-const LINGER = 60
-const FADE = 30
+/** How long a finished call's name stays at full strength, then how long it takes to fade. */
+const LINGER = 2_000
+const FADE = 1_000
 const DEMO_TOOLS = ['Grep', 'Read', 'Read', 'Edit', 'Bash', 'WebFetch', 'Agent', 'Write']
 /** The idle show's scenes, in turn: a rolling swell, rain, a scanner sweeping back and forth. */
 export const SCENES = ['swell', 'rain', 'scanner'] as const
-/** Frames each scene plays (20 s), the last of them crossfading into the next. */
-const SCENE = 600
-const SCENE_FADE = 60
-/** Frames of the scanner's sweep there and back. */
-const SCAN = 240
-/** Frames the demo thinks before the drums come in. */
-const DEMO_THINK = 75
+/** How long each scene plays, the end of it crossfading into the next. */
+const SCENE = 20_000
+const SCENE_FADE = 2_000
+/** The scanner's sweep there and back. */
+const SCAN = 8_000
+/** Drops a second at the height of the rain. */
+const RAIN = 6
+/** How long the demo plays, and how long it thinks before the drums come in. */
+const DEMO = 11_400
+const DEMO_THINK = 2_500
+/** The demo's drum machine: a sixteenth note (113 bpm), and how long each tool it calls runs. */
+const SIXTEENTH = 132
+const DEMO_CALL = 230
 /**
- * Frames an ask waits before the vamp: a hook may answer a permission request
- * on its own, and the vamp is for the ones the person answers.
+ * How long an ask waits before the vamp: a hook may answer a permission
+ * request on its own, and the vamp is for the ones the person answers.
  */
-export const GRACE = 45
-/** Frames a beat of the vamp lasts (100 bpm), and the frames it plays before its pulses shrink. */
-const BEAT = 18
-const BORED = 900
-const BORED_FADE = 150
-/** Frames between the meter's glints (10 s), and the frames one takes to run up it. */
-const GLINT_EVERY = 300
-const GLINT_FRAMES = 24
+export const GRACE = 1_500
+/** A beat of the vamp (100 bpm), how long it plays before its pulses shrink, and how long they take to. */
+export const BEAT = 600
+const BORED = 30_000
+const BORED_FADE = 5_000
+/** Between the meter's glints, and how long one takes to run up it. */
+const GLINT_EVERY = 10_000
+const GLINT_RUN = 800
 
 export class Spectrum {
   readonly level = new Float64Array(N)
+  /** Drum hits since the last step, and streamed characters, a rate over it. */
+  private readonly hits = new Float64Array(N)
   private readonly feed = new Float64Array(N)
   private readonly held = new Int32Array(N)
   /**
@@ -115,7 +140,10 @@ export class Spectrum {
   mind = 0
   /** How busy the thinking is, from its streamed text: 0 to 0.45. */
   restless = 0
-  frame = 0
+  /** The music's clock: how long it has played, which stands still while the frames stop. */
+  now = 0
+  /** How far the animation moved at the last step: its length, up to `MAX_STEP`. */
+  dt = 0
   /** A tool error's red flash, 1 fading to 0. */
   flash = 0
   /**
@@ -125,9 +153,9 @@ export class Spectrum {
   ambient = false
   /** How present the idle show is: fades in once all is quiet, out at the first sound. */
   idle = 0
-  /** Frames since the music stopped: how long Claude has been idle. */
+  /** How long since the music stopped: how long Claude has been idle. */
   quietFor = 0
-  /** Frames the idle show has played, across rests: where it is in its scenes. */
+  /** How long the idle show has played, across rests: where it is in its scenes. */
   private show = 0
   /** How much each scene plays now, by `SCENES`. */
   private readonly scene = new Float64Array(SCENES.length)
@@ -137,8 +165,10 @@ export class Spectrum {
   private crash = 0
   private sweep: number | undefined
   private sweepDirection = 1
+  /** The demo: how long it has left, how long it is, and the next sixteenth its drums play. */
   private demo = 0
   private demoLength = 0
+  private demoNext = 0
   private isDemoThinking = false
   private demoCall: { call: Call; endAt: number } | undefined
   /** The latest tool calls, oldest first, while their names show. */
@@ -149,23 +179,24 @@ export class Spectrum {
   private readonly cued = new Int32Array(N)
   /** How present the vamp is: rises once an ask is past its grace, falls once it is answered. */
   cue = 0
-  /** Frames the vamp has played: where it is in its bars, and whether it has thinned out. */
+  /** How long the vamp has played: where it is in its bars, and whether it has thinned out. */
   private vamp = 0
   /** Compactions running: the tape rewinds until they finish. */
   private rewinding = 0
-  private sweepSpeed = 0.05
+  /** How fast the sweep runs, in spectra a second. */
+  private sweepSpeed = 1.5
   /** The context's share of the window, 0 to 100, as its label says it; undefined until measured. */
   contextPercent: number | undefined
   /** How near auto-compact the context is, 0 to 1: where the meter is heading. */
   private fill = 0
   /** The meter as drawn: rises to `fill` quickly, drains slowly. */
   gauge = 0
-  /** The frame the meter's latest glint started: every so often, and at each measure. */
+  /** When the meter's latest glint started: every so often, and at each measure. */
   private glintAt = 0
 
   /** A drum hit on an instrument. */
   hit(id: SourceId, strength = 1) {
-    this.feed[INDEX[id]] = this.feed[INDEX[id]]! + HIT * strength
+    this.hits[INDEX[id]] = this.hits[INDEX[id]]! + HIT * strength
   }
 
   /** Streamed characters, a sustained tone while they keep coming. */
@@ -204,7 +235,7 @@ export class Spectrum {
       last.running += 1
       return last
     }
-    const call = { name, source, count: 1, running: 1, endedAt: this.frame }
+    const call = { name, source, count: 1, running: 1, endedAt: this.now }
     this.calls.push(call)
     if (this.calls.length > 16) this.calls.shift()
     return call
@@ -213,13 +244,13 @@ export class Spectrum {
   endCall(call: Call) {
     this.release(call.source)
     call.running = Math.max(0, call.running - 1)
-    if (call.running === 0) call.endedAt = this.frame
+    if (call.running === 0) call.endedAt = this.now
   }
 
   /** How strongly a call's name shows: 1 while it runs, fading to 0 once done. */
   strength(call: Call): number {
     if (call.running > 0) return 1
-    const age = this.frame - call.endedAt
+    const age = this.now - call.endedAt
     return age <= LINGER ? 0.9 : Math.max(0, 0.9 * (1 - (age - LINGER) / FADE))
   }
 
@@ -227,19 +258,19 @@ export class Spectrum {
   kick() {
     this.sweep = 0
     this.sweepDirection = 1
-    this.sweepSpeed = 0.05
+    this.sweepSpeed = 1.5
   }
 
   /** A sweep down: the turn was interrupted. */
   scratch() {
     this.sweep = 1
     this.sweepDirection = -1
-    this.sweepSpeed = 0.05
+    this.sweepSpeed = 1.5
   }
 
-  /** A tool call put to the person: the vamp, once `grace` frames pass unanswered; `answer` when they do. */
+  /** A tool call put to the person: the vamp, once `grace` passes unanswered; `answer` when they do. */
   ask(source: SourceId, call?: Call, grace = GRACE): Ask {
-    const ask = { source, call, at: this.frame, grace }
+    const ask = { source, call, at: this.now, grace }
     this.asks.add(ask)
     return ask
   }
@@ -250,14 +281,14 @@ export class Spectrum {
 
   /** Whether an ask is past its grace: the person is being waited on. */
   private isCued(ask: Ask): boolean {
-    return this.frame - ask.at >= ask.grace
+    return this.now - ask.at >= ask.grace
   }
 
-  /** Frames since the person was first asked, of the asks past their grace; undefined while none is. */
+  /** How long since the person was first asked, of the asks past their grace; undefined while none is. */
   get waitedFor(): number | undefined {
     let first: number | undefined
     for (const ask of this.asks) if (this.isCued(ask) && (first === undefined || ask.at < first)) first = ask.at
-    return first === undefined ? undefined : this.frame - first
+    return first === undefined ? undefined : this.now - first
   }
 
   /** How many of a call's runs wait on the person. */
@@ -284,18 +315,18 @@ export class Spectrum {
   /**
    * The context window measured: `percent` of it in use, and `limit`, the share
    * of it where auto-compact runs (1 when it is off), the top of the meter.
-   * The meter moves there over a few frames, or at once when `isInstant`.
+   * The meter moves there in a moment, or at once when `isInstant`.
    */
   measure(percent: number, limit = 1, isInstant = false) {
     this.contextPercent = Math.max(0, Math.min(100, percent))
     this.fill = Math.max(0, Math.min(1, percent / 100 / Math.max(0.05, Math.min(1, limit))))
     if (isInstant) this.gauge = this.fill
-    this.glintAt = this.frame
+    this.glintAt = this.now
   }
 
   /** How far a glint has run up the meter, 0 to 1; undefined between glints. */
   get glint(): number | undefined {
-    const t = (this.frame - this.glintAt) / GLINT_FRAMES
+    const t = (this.now - this.glintAt) / GLINT_RUN
     return t < 1 ? t : undefined
   }
 
@@ -308,81 +339,92 @@ export class Spectrum {
     this.flash = 1
   }
 
-  playDemo(frames = 345) {
-    this.demo = frames
-    this.demoLength = frames
+  playDemo(ms = DEMO) {
+    this.demo = ms
+    this.demoLength = ms
+    this.demoNext = 0
     this.kick()
   }
 
-  /** Moves one frame on. */
-  step() {
-    this.frame += 1
-    if (this.demo > 0) this.sequence()
-    const f = this.frame
+  /** Moves the music on by `elapsed`: its clocks by all of it, the animation by up to `MAX_STEP`. */
+  step(elapsed = FRAME_MS) {
+    const passed = Math.max(0, elapsed)
+    const ms = Math.min(passed, MAX_STEP)
+    this.now += passed
+    this.dt = ms
+    if (this.demo > 0) this.sequence(ms)
+    const t = this.now
     this.cued.fill(0)
     for (const ask of this.asks) if (this.isCued(ask)) this.cued[INDEX[ask.source]] = this.cued[INDEX[ask.source]]! + 1
+    const decay = fade(DECAY, ms)
+    // A stream is a rate: what came in over the step, as much as came in a frame.
+    const frames = Math.max(ms, FRAME_MS / 4) / FRAME_MS
     for (let i = 0; i < N; i++) {
-      const hit = 1 - Math.exp(-this.feed[i]!)
-      let next = Math.max(this.level[i]! * DECAY, hit)
-      if (this.held[i]! > this.cued[i]!) next = Math.max(next, 0.22 + 0.08 * Math.sin(f * 0.25 + i * 1.7))
+      const hit = 1 - Math.exp(-(this.hits[i]! + this.feed[i]! / frames))
+      let next = Math.max(this.level[i]! * decay, hit)
+      if (this.held[i]! > this.cued[i]!) next = Math.max(next, 0.22 + 0.08 * Math.sin(cycle(t, 830) + i * 1.7))
       this.level[i] = next < 0.004 ? 0 : next
+      this.hits[i] = 0
       this.feed[i] = 0
     }
     if (this.thinking > 0) {
       const i = INDEX.think
-      this.level[i] = Math.max(this.level[i]!, 0.16 + 0.1 * Math.sin(f * 0.12))
+      this.level[i] = Math.max(this.level[i]!, 0.16 + 0.1 * Math.sin(cycle(t, 1_730)))
     }
+    // Each eases toward where it is heading, or dies away, by its half-life.
     const mind = this.thinking > 0 ? Math.min(1, 0.6 + this.restless) : 0
-    this.mind += (mind - this.mind) * (mind > this.mind ? 0.12 : 0.1)
+    this.mind = ease(this.mind, mind, mind > this.mind ? 180 : 220, ms)
     if (mind === 0 && this.mind < 0.02) this.mind = 0
-    this.restless = this.restless < 0.005 ? 0 : this.restless * 0.93
+    this.restless = this.restless < 0.005 ? 0 : this.restless * fade(320, ms)
     if (this.sweep !== undefined) {
-      this.sweep += this.sweepSpeed * this.sweepDirection
+      this.sweep += (this.sweepSpeed * this.sweepDirection * ms) / 1000
       if (this.sweep > 1.15 || this.sweep < -0.15) this.sweep = undefined
     }
     // Compacting: the tape rewinds, sweep after sweep down the spectrum.
     if (this.rewinding > 0 && this.sweep === undefined) {
       this.sweep = 1.15
       this.sweepDirection = -1
-      this.sweepSpeed = 0.08
+      this.sweepSpeed = 2.4
     }
     const cue = this.cued.some(n => n > 0) ? 1 : 0
-    this.cue += (cue - this.cue) * (cue > this.cue ? 0.08 : 0.15)
+    this.cue = ease(this.cue, cue, cue > this.cue ? 275 : 140, ms)
     if (cue === 0 && this.cue < 0.01) this.cue = 0
-    if (cue === 1) this.vamp += 1
+    if (cue === 1) this.vamp += passed
     else if (this.cue === 0) this.vamp = 0
-    const gauge = this.gauge + (this.fill - this.gauge) * (this.fill > this.gauge ? 0.15 : 0.04)
+    const gauge = ease(this.gauge, this.fill, this.fill > this.gauge ? 140 : 560, ms)
     this.gauge = Math.abs(this.fill - gauge) < 0.002 ? this.fill : gauge
-    if (this.frame - this.glintAt >= GLINT_EVERY) this.glintAt = this.frame
-    this.crash = this.crash < 0.004 ? 0 : this.crash * 0.92
-    this.flash = this.flash < 0.01 ? 0 : this.flash * 0.9
+    if (t - this.glintAt >= GLINT_EVERY) this.glintAt = t
+    this.crash = this.crash < 0.004 ? 0 : this.crash * fade(275, ms)
+    this.flash = this.flash < 0.01 ? 0 : this.flash * fade(220, ms)
     for (let i = this.calls.length - 1; i >= 0; i--) {
       if (this.strength(this.calls[i]!) === 0) this.calls.splice(i, 1)
     }
     const isResting = this.isResting()
-    this.quietFor = isResting ? this.quietFor + 1 : 0
+    this.quietFor = isResting ? this.quietFor + passed : 0
     const idle = this.ambient && isResting ? 1 : 0
-    this.idle += (idle - this.idle) * (idle > this.idle ? 0.025 : 0.15)
+    this.idle = ease(this.idle, idle, idle > this.idle ? 900 : 140, ms)
     if (idle === 0 && this.idle < 0.01) this.idle = 0
-    if (this.idle > 0) this.play()
+    if (this.idle > 0) this.play(ms)
     else this.drops.length = 0
   }
 
-  /** The idle show moves on: its scenes, and the rain while it falls. */
-  private play() {
-    this.show += 1
+  /** The idle show moves on by `ms`: its scenes, and the rain while it falls. */
+  private play(ms: number) {
+    this.show += ms
     const t = this.show % (SCENE * SCENES.length)
     const now = Math.floor(t / SCENE)
-    const fade = Math.max(0, (t % SCENE) - (SCENE - SCENE_FADE)) / SCENE_FADE
+    const crossfade = Math.max(0, (t % SCENE) - (SCENE - SCENE_FADE)) / SCENE_FADE
     this.scene.fill(0)
-    this.scene[now] = 1 - fade
-    this.scene[(now + 1) % SCENES.length] = fade
+    this.scene[now] = 1 - crossfade
+    this.scene[(now + 1) % SCENES.length] = crossfade
+    const left = fade(100, ms)
     for (let i = this.drops.length - 1; i >= 0; i--) {
       const drop = this.drops[i]!
-      drop.energy *= 0.8
+      drop.energy *= left
       if (drop.energy < 0.01) this.drops.splice(i, 1)
     }
-    if (this.rand() < 0.18 * this.scene[1]!) this.drops.push({ x: this.rand(), energy: 0.4 + 0.45 * this.rand() })
+    const falls = 1 - Math.exp((-RAIN * this.scene[1]! * ms) / 1000)
+    if (this.rand() < falls) this.drops.push({ x: this.rand(), energy: 0.4 + 0.45 * this.rand() })
   }
 
   /** The scene the idle show plays most now. */
@@ -439,7 +481,7 @@ export class Spectrum {
     if (swell! > 0) energy += swell! * drift(x, this.show)
     if (rain! > 0) energy += 0.15 * rain! * drift(x, this.show)
     for (const drop of this.drops) energy += drop.energy * bump(x - drop.x, 0.022)
-    if (scanner! > 0) energy += 0.5 * scanner! * bump(x - (0.5 - 0.5 * Math.cos((2 * Math.PI * this.show) / SCAN)), 0.035)
+    if (scanner! > 0) energy += 0.5 * scanner! * bump(x - (0.5 - 0.5 * Math.cos(cycle(this.show, SCAN))), 0.035)
     return energy
   }
 
@@ -478,35 +520,45 @@ export class Spectrum {
     return call.running > this.waitingOn(call)
   }
 
-  /** The demo: a spell of thinking, then the drum machine: kick, snare, hats, a melody, fills. */
-  private sequence() {
-    this.demo -= 1
+  /**
+   * The demo, `ms` on: a spell of thinking, then the drum machine: kick, snare,
+   * hats, a melody, fills. Streams come in as a rate, so as much over `ms` as a
+   * frame's worth for each frame it spans.
+   */
+  private sequence(ms: number) {
+    this.demo = Math.max(0, this.demo - ms)
     const elapsed = this.demoLength - this.demo
+    const frames = ms / FRAME_MS
     if (elapsed < DEMO_THINK && this.demo > 0) {
       if (!this.isDemoThinking) {
         this.isDemoThinking = true
         this.beginThinking()
       }
-      this.stream('think', 6 + 6 * Math.sin(elapsed * 0.2))
+      this.stream('think', (6 + 6 * Math.sin(cycle(elapsed, 1_040))) * frames)
       return
     }
     if (this.isDemoThinking) {
       this.isDemoThinking = false
       this.endThinking()
     }
-    const f = this.frame
-    const beat = f % 16
-    if (beat === 0) this.hit('think')
-    if (beat === 8) this.hit('bash', 0.8)
-    if (f % 4 === 0) this.stream('args', 30)
-    if (f % 64 < 40) this.stream('text', 6 + 6 * Math.sin(f * 0.3))
-    if (this.demoCall !== undefined && (f >= this.demoCall.endAt || this.demo === 0)) {
+    const drums = elapsed - DEMO_THINK
+    // The melody plays through the first ten sixteenths of each bar.
+    if (drums >= 0 && drums % (16 * SIXTEENTH) < 10 * SIXTEENTH) this.stream('text', (6 + 6 * Math.sin(cycle(drums, 690))) * frames)
+    if (this.demoCall !== undefined && (elapsed >= this.demoCall.endAt || this.demo === 0)) {
       this.endCall(this.demoCall.call)
       this.demoCall = undefined
     }
-    if ((beat === 4 || beat === 12) && this.demoCall === undefined && this.demo > 8) {
-      const call = this.startCall(DEMO_TOOLS[Math.floor(f / 8) % DEMO_TOOLS.length]!)
-      this.demoCall = { call, endAt: f + 7 }
+    // Each sixteenth the step reached: hats on every one, the kick on the beat,
+    // the snare halfway through it, and a tool between.
+    for (; this.demoNext * SIXTEENTH <= drums; this.demoNext++) {
+      const n = this.demoNext
+      this.hit('args', 0.21)
+      if (n % 4 === 0) this.hit('think')
+      if (n % 4 === 2) this.hit('bash', 0.8)
+      if (n % 2 === 1 && this.demoCall === undefined && this.demo > 2 * SIXTEENTH) {
+        const call = this.startCall(DEMO_TOOLS[Math.floor(n / 2) % DEMO_TOOLS.length]!)
+        this.demoCall = { call, endAt: elapsed + DEMO_CALL }
+      }
     }
     if (this.demo === 0) this.cymbal()
   }
@@ -589,6 +641,8 @@ const AMBER_AT = 0.7
 const RED_AT = 0.9
 const METER = [0x22c55e, CUE, ERROR]
 const SPINNER = [0x280b, 0x2819, 0x2839, 0x2838, 0x283c, 0x2834, 0x2826, 0x2827, 0x2807, 0x280f]
+/** How long the spinner shows each of its glyphs. */
+const SPIN = 70
 const BRAILLE = 0x2800
 /** Braille dot bits by [column][row] within a cell's 2×4 dots. */
 const DOTS = [
@@ -647,16 +701,16 @@ const label = (call: Call) => (call.count > 1 ? `${call.name}\u00d7${call.count}
 type Named = { text: string; source: SourceId; strength: number; isRunning: boolean; color?: number }
 
 /** How long Claude has been idle, as its label says it: `idle`, `idle 4m`, `idle 1h 5m`. */
-export function idleText(frames: number): string {
-  const minutes = Math.floor((frames * FRAME_MS) / 60000)
+export function idleText(ms: number): string {
+  const minutes = Math.floor(ms / 60_000)
   if (minutes < 1) return 'idle'
   if (minutes < 60) return `idle ${minutes}m`
   return `idle ${Math.floor(minutes / 60)}h ${minutes % 60}m`
 }
 
 /** A stretch of time as a clock reads it: `0:42`, `12:05`, `1:02:03`. */
-export function clockText(frames: number): string {
-  const seconds = Math.floor((frames * FRAME_MS) / 1000)
+export function clockText(ms: number): string {
+  const seconds = Math.floor(ms / 1000)
   const s = String(seconds % 60).padStart(2, '0')
   const minutes = Math.floor(seconds / 60)
   if (minutes < 60) return `${minutes}:${s}`
@@ -680,7 +734,7 @@ const waitingName = (spectrum: Spectrum): Named | undefined => {
 /** While the conversation is compacted. */
 const compactingName = (spectrum: Spectrum): Named | undefined =>
   spectrum.isRewinding
-    ? { text: 'compacting', source: 'think', strength: 0.8 + 0.2 * Math.sin(spectrum.frame * 0.1), isRunning: true, color: LEGEND_GRAY }
+    ? { text: 'compacting', source: 'think', strength: 0.8 + 0.2 * Math.sin(cycle(spectrum.now, 2_070)), isRunning: true, color: LEGEND_GRAY }
     : undefined
 
 /** The context's fill as its label says it, colored as the meter is at its top. */
@@ -705,7 +759,7 @@ const idleName = (spectrum: Spectrum): Named | undefined =>
     ? {
         text: idleText(spectrum.quietFor),
         source: 'think',
-        strength: spectrum.idle * (0.7 + 0.2 * Math.sin(spectrum.frame * 0.04)),
+        strength: spectrum.idle * (0.7 + 0.2 * Math.sin(cycle(spectrum.now, 5_180))),
         isRunning: false,
         color: LEGEND_GRAY,
       }
@@ -754,7 +808,7 @@ export function trail(spectrum: Spectrum, theme: VizTheme, columns: number, rows
     end -= text.length
     if (spin > 0) {
       const cell = (row * columns + end - 2) * 3
-      words[cell] = SPINNER[Math.floor(spectrum.frame / 2) % SPINNER.length]!
+      words[cell] = SPINNER[Math.floor(spectrum.now / SPIN) % SPINNER.length]!
       words[cell + 1] = nameColorOf(theme, name, 1)
       end -= spin
     }
@@ -780,6 +834,17 @@ function random(seed: number): () => number {
  */
 export type Layout = { width: number; gap: number; meter?: boolean }
 
+/** How fast a bar rises toward its level: half the way every 19 ms, nearly at once. */
+const RISE = 19
+/**
+ * How heavily a bar falls: its height over a point half a bar under the floor
+ * halves every 450 ms, so it lands rather than hovering just above it.
+ */
+const SINK = 450
+/** How long a peak cap hangs before it falls, and the pull it falls by, in bars a second each second. */
+const HOLD = 330
+const GRAVITY = 3.2
+
 /** One drawing's bars: their heights and peaks, laid out for its size. */
 export class Bars {
   readonly count: number
@@ -792,8 +857,10 @@ export class Bars {
   readonly meter: boolean
   private readonly height: Float64Array
   private readonly peak: Float64Array
+  /** How fast each peak cap falls, in bars a second, and how long it hangs first. */
   private readonly fall: Float64Array
-  private readonly hold: Int32Array
+  private readonly hold: Float64Array
+  /** Each bar's own shimmer: where its wave starts, and how fast it turns, in radians a second. */
   private readonly phase: Float64Array
   private readonly speed: Float64Array
   private readonly tint: Uint32Array
@@ -813,14 +880,14 @@ export class Bars {
     this.height = new Float64Array(this.count)
     this.peak = new Float64Array(this.count)
     this.fall = new Float64Array(this.count)
-    this.hold = new Int32Array(this.count)
+    this.hold = new Float64Array(this.count)
     this.phase = new Float64Array(this.count)
     this.speed = new Float64Array(this.count)
     this.tint = new Uint32Array(this.count)
     this.rand = random(columns * 131 + rows)
     for (let b = 0; b < this.count; b++) {
       this.phase[b] = this.rand() * Math.PI * 2
-      this.speed[b] = 0.15 + this.rand() * 0.35
+      this.speed[b] = 4.5 + this.rand() * 10.5
       this.tint[b] = instrumentColor((b + 0.5) / this.count)
     }
   }
@@ -831,30 +898,33 @@ export class Bars {
     return Math.round(this.offset + b * (this.width + this.gap) + (this.width - 1) / 2)
   }
 
-  /** Moves the bars toward the spectrum: a fast rise, a heavy fall. */
+  /** Moves the bars toward the spectrum, as far as its last step went: a fast rise, a heavy fall. */
   step(spectrum: Spectrum) {
-    const f = spectrum.frame
+    const { dt } = spectrum
+    const seconds = spectrum.now / 1000
+    const rise = fade(RISE, dt)
+    const sink = fade(SINK, dt)
     // The shows move smoothly: the shimmer calms while the idle show or the vamp plays.
     const shimmer = 1 - 0.8 * Math.max(spectrum.idle, spectrum.cue)
     for (let b = 0; b < this.count; b++) {
       const x = (b + 0.5) / this.count
-      const jitter = 0.22 * Math.sin(f * this.speed[b]! + this.phase[b]!) + 0.16 * (this.rand() - 0.5)
+      const jitter = 0.22 * Math.sin(seconds * this.speed[b]! + this.phase[b]!) + 0.16 * (this.rand() - 0.5)
       const wobble = 0.8 + jitter * shimmer
       const target = 1 - Math.exp(-2.1 * spectrum.at(x) * wobble)
       let h = this.height[b]!
-      h = target > h ? h + (target - h) * 0.7 : Math.max(target, h - 0.025 - h * 0.05)
+      h = target > h ? target + (h - target) * rise : Math.max(target, (h + 0.5) * sink - 0.5)
       this.height[b] = h < 0.002 ? 0 : h
       let p = this.peak[b]!
       if (h >= p) {
         p = h
         this.fall[b] = 0
-        this.hold[b] = 10
+        this.hold[b] = HOLD
       } else if (this.hold[b]! > 0) {
-        this.hold[b] = this.hold[b]! - 1
+        this.hold[b] = this.hold[b]! - dt
       } else {
-        const v = this.fall[b]! + 0.0035
+        const v = this.fall[b]! + (GRAVITY * dt) / 1000
         this.fall[b] = v
-        p = Math.max(h, p - v)
+        p = Math.max(h, p - (v * dt) / 1000)
       }
       this.peak[b] = p < 0.002 ? 0 : p
     }
@@ -944,7 +1014,7 @@ export class Bars {
    */
   private brainwave(words: Uint32Array, theme: VizTheme, spectrum: Spectrum) {
     const { columns, rows } = this
-    const { mind, restless, frame: f } = spectrum
+    const { mind, restless, now } = spectrum
     const dotColumns = this.span * 2
     // Above the floor row, so it never threads between the bars' feet.
     const dotRows = Math.max(1, rows - 1) * 4
@@ -955,9 +1025,9 @@ export class Bars {
     for (let x = 0; x < dotColumns; x++) {
       const u = x / dotColumns
       const wave =
-        0.55 * Math.sin(2 * Math.PI * 1.3 * u + f * 0.19) +
-        0.3 * Math.sin(2 * Math.PI * 3.1 * u - f * 0.11 + 1.3) +
-        (0.12 + restless) * Math.sin(2 * Math.PI * 8.3 * u + f * 0.53)
+        0.55 * Math.sin(2 * Math.PI * 1.3 * u + cycle(now, 1_090)) +
+        0.3 * Math.sin(2 * Math.PI * 3.1 * u - cycle(now, 1_880) + 1.3) +
+        (0.12 + restless) * Math.sin(2 * Math.PI * 8.3 * u + cycle(now, 390))
       const y = Math.max(0, Math.min(dotRows - 1, Math.round(middle + reach * wave)))
       const from = previous ?? y
       for (let dot = Math.min(from, y); dot <= Math.max(from, y); dot++) {
@@ -970,7 +1040,7 @@ export class Bars {
     for (let cell = 0; cell < masks.length; cell++) {
       const i = cell * 3
       if (masks[cell] === 0 || words[i] !== SPACE) continue
-      const pulse = 0.75 + 0.25 * Math.sin(((cell % columns) / this.span) * 14 - f * 0.3)
+      const pulse = 0.75 + 0.25 * Math.sin(((cell % columns) / this.span) * 14 - cycle(now, 690))
       words[i] = BRAILLE + masks[cell]!
       words[i + 1] = mix(0, base, (0.3 + 0.7 * mind) * pulse)
     }
