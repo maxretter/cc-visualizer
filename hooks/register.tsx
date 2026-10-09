@@ -124,6 +124,9 @@ export const register: Register = on => {
   let modeNow: VizMode = 'auto'
   let themeNow: VizTheme = 'instrument'
   let idleNow = true
+  // The prompt's column less the band's five, as the band above is told it:
+  // narrower beside a docked pane. The hint line is told only the screen's.
+  let bodyColumns: number | undefined
   // Runs the frames until the music stops and the bars have fallen; made by
   // session.start, whose `$` the frames draw through.
   let wake = () => {}
@@ -294,7 +297,8 @@ export const register: Register = on => {
     const savedPlace = prefs.place
     if (isPlace(savedPlace)) await update($, place, () => savedPlace)
     if (typeof prefs.idle === 'boolean') idleNow = prefs.idle
-    await update($, isPlaying, () => false)
+    // Playing or not as the frames are now: a reload mid-turn may have woken them already.
+    await update($, isPlaying, () => ticker !== undefined && tempo === FRAME_MS)
     // The meter as it stood, after a reload or on a resumed session.
     void measureContext($).then(remeasured, () => {})
 
@@ -512,6 +516,12 @@ export const register: Register = on => {
     ])
     modeNow = m
     themeNow = t
+    if (e.surface === 'terminal' && e.props.bodyColumns !== bodyColumns) {
+      const had = bodyColumns
+      bodyColumns = e.props.bodyColumns
+      // A pane docked or closed: the band below the prompt fits itself again.
+      if (had !== undefined && p === 'below') $.ui.invalidate('ui.render')
+    }
     const isShown = m === 'always' || (m === 'auto' && (e.props.isWorking || playing))
     if (e.surface !== 'terminal' || e.props.hasSurvey || paneOpen || !isShown || p !== 'above') {
       sites.delete(e.requestId)
@@ -544,12 +554,12 @@ export const register: Register = on => {
 
     const ui = $.ui.resolve(e)
     const { Box } = ui
-    // The hint line has no measured body: the band keeps the five columns the band above leaves.
-    const bodyColumns = (e.viewport?.columns ?? 80) - 5
+    // As wide as the band above would be; until it has been told, the screen less its five.
+    const columns = bodyColumns ?? (e.viewport?.columns ?? 80) - 5
 
     return (
       <Box flexDirection="column">
-        {band(ui, e.requestId, s, t, bodyColumns, BAND_ROWS)}
+        {band(ui, e.requestId, s, t, columns, BAND_ROWS)}
         {hint}
       </Box>
     )

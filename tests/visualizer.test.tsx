@@ -721,6 +721,36 @@ describe('a band taken off screen', () => {
   })
 })
 
+describe('a reload', () => {
+  test('a tool call while the plugin starts keeps it playing', async ($, on) => {
+    const clock = mock.clock(on)
+    mock.store(on)
+    on('session.start', ($, e) => ({ cwd: e.cwd }))
+    // The command registers slowly: the start is still under way when a call comes.
+    let registered = () => {}
+    on('command.register', ($, e) => new Promise(resolve => (registered = () => resolve({ value: { command: e.name } }))))
+    on('command.run', () => ({ text: '' }))
+    on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+      const { Text } = $.ui.resolve(e)
+
+      return <Text>engine</Text>
+    })
+    on('ui.blit', () => ({ value: {} }))
+    on('tool.call', () => new Promise(() => {}))
+
+    const starting = $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+    await clock.settle()
+    $.tool.call({ tool: 'Bash', command: 'make', tool_use_id: 't1' }).catch(() => {})
+    await clock.settle()
+    registered()
+    await starting
+    // Not working, by the props, but the call still runs: the band plays on.
+    const ui = await $.ui.mount(band(false))
+    expect(await ui.find({ type: 'Raster', key: 'band' })).toBeDefined()
+    await ui.unmount()
+  })
+})
+
 describe('frames', () => {
   test('a frame the same as the last one sent is not sent again', async ($, on) => {
     const { clock, ui, blits, finish } = await staged($, on, 'mini')
@@ -964,6 +994,24 @@ describe('place', () => {
     const writes = saved.length
     await $.command.run(run('pos below'))
     expect(saved).toHaveLength(writes)
+  })
+
+  test('the band below the prompt is as wide as the prompt, beside a docked pane too', async ($, on) => {
+    engine(on)
+    mock.store(on)
+    const width = async (ui: { find: (query: { type: 'Raster'; key: string }) => Promise<{ props: unknown } | undefined> }) =>
+      ((await ui.find({ type: 'Raster', key: 'band' }))?.props as { columns?: number } | undefined)?.columns
+
+    await $.command.run(run('pos below'))
+    const above = await $.ui.mount(band(true))
+    const below = await $.ui.mount(hint(true))
+    expect(await width(below)).toBe(80)
+
+    // A pane docks beside the transcript: the prompt's column narrows, the screen does not.
+    await above.redraw({ ...band(true).props, bodyColumns: 50 })
+    expect(await width(below)).toBe(50)
+    await below.unmount()
+    await above.unmount()
   })
 
   test('/viz pos says where it cannot go', async ($, on) => {
