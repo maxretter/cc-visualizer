@@ -983,6 +983,27 @@ describe('light terminals', () => {
   })
 })
 
+describe('the command', () => {
+  test('its hint lists the verbs, flat, and /viz help tells each one', async ($, on) => {
+    mock.store(on)
+    let hint = ''
+    on('session.start', ($, e) => ({ cwd: e.cwd }))
+    on('command.register', ($, e) => {
+      hint = e.argumentHint ?? ''
+
+      return { value: { command: e.name } }
+    })
+    on('command.run', () => ({ text: '' }))
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+
+    // No verb's own options inside it, to read as the next verb.
+    expect(hint).toMatch(/^\[[a-z]+(\|[a-z]+)*\]$/)
+    const help =
+      (await $.command.run({ command: 'viz', args: 'help', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 80 } })).text ?? ''
+    for (const verb of hint.slice(1, -1).split('|')) expect(help).toContain(`/viz ${verb}`)
+  })
+})
+
 describe('a reload', () => {
   test('a tool call while the plugin starts keeps it playing', async ($, on) => {
     const clock = mock.clock(on)

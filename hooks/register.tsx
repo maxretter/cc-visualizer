@@ -50,6 +50,7 @@ const USAGE = [
   `/viz theme [name]       ${THEME_NAMES.join(', ')}`,
   "/viz ground [auto|light|dark]  your terminal's background (auto follows Claude Code's theme)",
   "/viz doctor             check your terminal's colors and glyphs against what the band expects",
+  '/viz help               this list',
 ].join('\n')
 
 /** What each of the doctor's swatch rows checks. */
@@ -310,7 +311,8 @@ export const register: Register = on => {
     await $.command.register({
       name: 'viz',
       description: 'Music visualizer for what Claude is doing',
-      argumentHint: '[auto|always|off|bar|mini|pos [above|below]|pane|demo|idle [on|off]|theme [name]|ground [auto|light|dark]|doctor]',
+      // The verbs alone: a verb's own options nested in the list read as the next verb's.
+      argumentHint: '[auto|always|off|bar|mini|pos|pane|demo|idle|theme|ground|doctor|help]',
       immediate: true,
     })
     const prefs = prefsOf(await $.store.get('prefs'))
