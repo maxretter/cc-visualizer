@@ -17,8 +17,6 @@ const wide = (columns: number): Layout => ({ width: columns >= 30 ? 2 : 1, gap: 
 const PERSON = new Set(['AskUserQuestion', 'ExitPlanMode'])
 /** The most columns the tool names beside the mini spectrum take. */
 const MINI_NAMES = 56
-/** How often a frame is drawn while only a show plays (the idle show, the vamp): half the full rate. */
-const SHOW_MS = 2 * FRAME_MS
 /** How long between tries at a drawing whose frames the engine refuses. */
 const RETRY = 500
 const MODES: readonly VizMode[] = ['auto', 'always', 'off']
@@ -61,6 +59,8 @@ type Site = {
   names?: { key: string; columns: number; rows: number }
   /** While the engine refuses its frames (a dialog took its place): when to try again, on the music's clock. */
   retryAt?: number
+  /** The cells last sent, by key: a frame the same as them changes nothing on screen, and is not sent. */
+  sent: Map<string, string>
 }
 
 type Mount = { layout?: Layout; labels?: boolean; names?: Site['names'] }
@@ -94,7 +94,8 @@ async function measureContext($: EngineInterface): Promise<Measured> {
     breakdown?.isAutoCompactEnabled === true && breakdown.autoCompactThreshold !== undefined && context.window > 0
       ? breakdown.autoCompactThreshold / context.window
       : 1
-  return { tokens: context.tokens, window: context.window, percent: context.percent, limit }
+  // Before the window's first response (a cleared or resumed conversation), the breakdown's estimate.
+  return { tokens: context.tokens ?? breakdown?.totalTokens, window: context.window, percent: context.percent, limit }
 }
 
 /** The share of the window in use, 0 to 100, finer than the whole percent when the tokens are known. */
@@ -155,12 +156,30 @@ export const register: Register = on => {
     return context
   }
 
-  // A drawing of the same key and size keeps its bars where they stood.
+  // The context measured now, not at the next response: the meter moves there
+  // on a drawing that shows, and is simply there on the next one.
+  const remeasured = (context: Measured) => {
+    const isShown = sites.size > 0
+    spectrum.measure(percentOf(measured(context)), limit, !isShown)
+    if (isShown) wake()
+  }
+
+  // A drawing of the same key and size keeps its bars where they stood. One
+  // drawn again while a dialog covers it is still held: the dialog may show it
+  // as it was, so the frames go on trying until one lands.
   const mount = (requestId: string, key: string, columns: number, rows: number, extra: Mount = {}): Site => {
     const had = sites.get(requestId)
     const isSame = had?.key === key && had.bars.columns === columns && had.bars.rows === rows
     const bars = isSame ? had.bars : new Bars(columns, rows, extra.layout)
-    const site = { requestId, key, bars, labels: extra.labels ?? false, names: extra.names }
+    const site = {
+      requestId,
+      key,
+      bars,
+      labels: extra.labels ?? false,
+      names: extra.names,
+      retryAt: had?.retryAt,
+      sent: new Map<string, string>(),
+    }
     sites.set(requestId, site)
     rest()
     return site
@@ -172,8 +191,12 @@ export const register: Register = on => {
     // new render, so only a frame that lands brings it back to life.
     const hold = (site: Site) => {
       site.retryAt = spectrum.now + RETRY
+      // None of what it was sent may be on screen: the next try sends it all.
+      site.sent.clear()
     }
     const blit = (site: Site, key: string, cells: string) => {
+      if (site.sent.get(key) === cells) return
+      site.sent.set(key, cells)
       void $.ui.blit({ requestId: site.requestId, key, cells }).then(
         sent => {
           if (sent.deny !== undefined) hold(site)
@@ -223,17 +246,21 @@ export const register: Register = on => {
         return
       }
       // The music stopped. A show plays slower: the vamp while the person is
-      // waited on, or the idle show on a drawing that stays up. Or nothing
-      // does: stop once the bars have fallen.
+      // waited on, or the idle show on a drawing that stays up, slower still
+      // once Claude has been idle a while. Or nothing does: stop once the bars
+      // have fallen, the last frame has reached the screen (not one a dialog
+      // refused) and no glint is partway up the meter.
+      const wasFull = tempo === FRAME_MS
       if (spectrum.ambient || !spectrum.isResting()) {
-        if (tempo !== FRAME_MS) return
-        run(SHOW_MS)
-      } else if (spectrum.isQuiet() && [...sites.values()].every(site => site.bars.isSettled())) {
-        stop()
-      } else {
+        run(spectrum.showMs)
+      } else if (!spectrum.isQuiet() || ![...sites.values()].every(site => site.bars.isSettled())) {
         return
+      } else if ((spectrum.glint !== undefined && spectrum.gauge > 0) || [...sites.values()].some(site => site.retryAt !== undefined)) {
+        run(spectrum.showMs)
+      } else {
+        stop()
       }
-      void update($, isPlaying, () => false)
+      if (wasFull) void update($, isPlaying, () => false)
     }
     wake = () => {
       if ((ticker !== undefined && tempo === FRAME_MS) || (modeNow === 'off' && sites.size === 0)) return
@@ -241,7 +268,7 @@ export const register: Register = on => {
       void update($, isPlaying, () => true)
     }
     rest = () => {
-      if (ticker === undefined && isAmbient()) run(SHOW_MS)
+      if (ticker === undefined && isAmbient()) run(spectrum.showMs)
     }
 
     await $.command.register({
@@ -269,13 +296,7 @@ export const register: Register = on => {
     if (typeof prefs.idle === 'boolean') idleNow = prefs.idle
     await update($, isPlaying, () => false)
     // The meter as it stood, after a reload or on a resumed session.
-    void measureContext($).then(
-      context => {
-        const percent = percentOf(measured(context))
-        if (percent !== undefined) spectrum.measure(percent, limit, true)
-      },
-      () => {},
-    )
+    void measureContext($).then(remeasured, () => {})
 
     return next(e)
   })
@@ -407,6 +428,24 @@ export const register: Register = on => {
 
     return next(e)
   }).catch(($, e, next) => next(e))
+
+  // The conversation cleared or another resumed: the meter moves to what it
+  // holds now, which no response has reported yet.
+  on('classic.SessionStart', ($, e, next) => {
+    if ((e.source === 'clear' || e.source === 'resume') && e.agent_id === undefined) {
+      void measureContext($).then(remeasured, () => {})
+    }
+
+    return next(e)
+  })
+
+  // Auto-compact turned on or off: the top of the meter moves.
+  on('config.set', { key: 'autoCompact' }, async ($, e, next) => {
+    const set = await next(e)
+    void measureContext($).then(remeasured, () => {})
+
+    return set
+  })
 
   // The conversation compacts: the tape rewinds until it is done, and the meter drains.
   on('session.compact', async ($, e, next) => {

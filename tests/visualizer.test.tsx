@@ -1,8 +1,8 @@
-import type { On, ToolCallResult } from 'claude-code'
+import type { On, SessionUsage, ToolCallResult } from 'claude-code'
 import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
-import { BEAT, Bars, FRAME_MS, GRACE, Spectrum, clockText, idleText, shortName, sourceOf, trail } from '../hooks/engine'
+import { BEAT, Bars, FRAME_MS, GRACE, Spectrum, clockText, idleText, mix, shortName, sourceOf, trail } from '../hooks/engine'
 
 /** The glyphs of Raster cells, row by row. */
 const text = (cells: string, columns: number): string[] => {
@@ -60,10 +60,10 @@ const prefsStore = (on: On, initial?: Record<string, unknown>) => {
 
 /**
  * A session with the band above the prompt while Claude works, in `mode`, and
- * its frames kept: tool calls run until the test finishes them, and each check
- * beneath asks.
+ * its frames kept: tool calls run until the test finishes them, each check
+ * beneath asks, and the context is `context()` when one is given.
  */
-const staged = async ($: Engine, on: On, mode = 'always') => {
+const staged = async ($: Engine, on: On, mode = 'always', context?: () => object) => {
   const clock = mock.clock(on)
   mock.store(on)
   on('session.start', ($, e) => ({ cwd: e.cwd }))
@@ -79,11 +79,15 @@ const staged = async ($: Engine, on: On, mode = 'always') => {
 
     return <Text>{e.props.hint}</Text>
   })
+  // The frames that reached the screen, and how many were sent, by drawing;
+  // while a dialog covers the band, none reach it.
   const drawn = new Map<string, string>()
-  let blits = 0
+  const blits = new Map<string, number>()
+  let isCovered = false
   on('ui.blit', ($, e) => {
+    blits.set(e.key, (blits.get(e.key) ?? 0) + 1)
+    if (isCovered) return { value: { deny: 'covered by a dialog' } }
     if ('cells' in e) drawn.set(e.key, e.cells)
-    blits += 1
 
     return { value: {} }
   })
@@ -92,21 +96,33 @@ const staged = async ($: Engine, on: On, mode = 'always') => {
   on('tool.check', () => ({ decision: 'ask' as const }))
   on('classic.PermissionRequest', () => ({}))
   on('classic.PostToolUseFailure', () => ({}))
+  on('classic.SessionStart', () => ({}))
+  on('config.set', ($, e) => ({ value: e.value }))
+  if (context !== undefined) {
+    on('session.usage', () => ({ value: { startedAt: 0, context: context(), rateLimits: [] } as unknown as SessionUsage }))
+  }
 
+  const viz = (args: string) =>
+    $.command.run({ command: 'viz', args, origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 80 } })
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
-  await $.command.run({ command: 'viz', args: mode, origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 80 } })
+  await viz(mode)
   const ui = await $.ui.mount(band(true))
   return {
     clock,
     ui,
+    viz,
     /** The band's cells as last drawn. */
     cells: () => drawn.get('band') ?? '',
     /** The band's top row, where its labels go. */
     label: () => text(drawn.get('band') ?? '', 80)[0] ?? '',
-    /** How many frames were sent. */
-    blits: () => blits,
+    /** How many frames were sent, of one drawing or of all. */
+    blits: (key?: string) => (key === undefined ? [...blits.values()].reduce((sum, n) => sum + n, 0) : (blits.get(key) ?? 0)),
     /** Ends a running call, as the tool answered. */
     finish: (id: string, ran: ToolCallResult = { result: 'done' }) => running.get(id)?.(ran),
+    /** A dialog opens over the band, or closes. */
+    cover: (is: boolean) => {
+      isCovered = is
+    },
   }
 }
 
@@ -681,6 +697,56 @@ describe('a band taken off screen', () => {
     expect(landed - before).toBeGreaterThan(10)
     await ui.unmount()
   })
+
+  test('the frames stop only once the last one has reached the screen', async ($, on) => {
+    const { clock, ui, viz, label, blits, finish, cover } = await staged($, on)
+    await viz('idle off')
+    const call = $.tool.call({ tool: 'Bash', command: 'make', tool_use_id: 't1' })
+    await clock.advance(500)
+    expect(label()).toContain('Bash')
+
+    // A dialog opens over the band; the call ends and the bars fall behind it.
+    cover(true)
+    finish('t1')
+    await call
+    await clock.advance(8000)
+    // It closes: the band at rest reaches the screen, not the frame it covered, and then the frames stop.
+    cover(false)
+    await clock.advance(2000)
+    expect(label()).not.toContain('Bash')
+    const sent = blits()
+    await clock.advance(2000)
+    expect(blits()).toBe(sent)
+    await ui.unmount()
+  })
+})
+
+describe('frames', () => {
+  test('a frame the same as the last one sent is not sent again', async ($, on) => {
+    const { clock, ui, blits, finish } = await staged($, on, 'mini')
+    const call = $.tool.call({ tool: 'Bash', command: 'make', tool_use_id: 't1' })
+    await clock.advance(1000)
+    // The bars move every frame; the names beside them only as the spinner turns.
+    expect(blits('mini')).toBeGreaterThan(20)
+    expect(blits('names')).toBeGreaterThan(5)
+    expect(blits('names')).toBeLessThan(0.75 * blits('mini'))
+    finish('t1')
+    await call
+    await ui.unmount()
+  })
+
+  test('the idle show wants frames slower once Claude has been idle a while', () => {
+    const spectrum = new Spectrum()
+    spectrum.ambient = true
+    spectrum.step()
+    expect(spectrum.showMs).toBe(2 * FRAME_MS)
+    spectrum.step(5 * 60_000)
+    expect(spectrum.showMs).toBe(125)
+    // Waiting on the person: the vamp keeps its pace.
+    spectrum.ask('bash', undefined, 0)
+    spectrum.step()
+    expect(spectrum.showMs).toBe(2 * FRAME_MS)
+  })
 })
 
 describe('context', () => {
@@ -771,6 +837,44 @@ describe('context', () => {
     const raster = await ui.find({ type: 'Raster', key: 'band' })
     const rows = text(String(raster?.props.cells), 80)
     expect(rows.map(row => row.slice(78))).toEqual(Array(5).fill('\u2591\u2591'))
+    await ui.unmount()
+  })
+})
+
+describe('context, measured', () => {
+  /** The label's color, where `word` is drawn in the band's top row. */
+  const colorOf = (cells: string, word: string) => {
+    const at = (text(cells, 80)[0] ?? '').indexOf(word)
+    return at < 0 ? undefined : colors(cells, 80)[0]![at]
+  }
+
+  test('/clear moves the meter to what the fresh conversation holds', async ($, on) => {
+    let context: object = { tokens: 140_000, window: 200_000 }
+    const { clock, ui, label } = await staged($, on, 'always', () => context)
+    await clock.advance(500)
+    expect(label()).toContain('context 70%')
+
+    // Cleared: no response has reported its fill yet, so the estimate.
+    context = { window: 200_000, breakdown: { totalTokens: 20_000, isAutoCompactEnabled: false } }
+    await $.classic.SessionStart({ source: 'clear' })
+    await clock.advance(2000)
+    expect(label()).toContain('context 10%')
+    await ui.unmount()
+  })
+
+  test('turning auto-compact off moves the top of the meter', async ($, on) => {
+    const compacting = { isAutoCompactEnabled: true, autoCompactThreshold: 160_000, totalTokens: 152_000 }
+    let context: object = { tokens: 152_000, window: 200_000, breakdown: compacting }
+    const { clock, ui, cells } = await staged($, on, 'always', () => context)
+    await clock.advance(500)
+    // 76% of the window is 95% of the way to auto-compact: red.
+    expect(colorOf(cells(), 'context')).toBe(mix(0, 0xef4444, 0.85))
+
+    context = { ...context, breakdown: { ...compacting, isAutoCompactEnabled: false } }
+    await $.config.set({ key: 'autoCompact', value: false, previous: true, provider: { plugin: 'engine', tier: 'core' }, origin: { kind: 'composer' } })
+    await clock.advance(3000)
+    // Now 76% of the way to the top: amber.
+    expect(colorOf(cells(), 'context')).toBe(mix(0, 0xf59e0b, 0.85))
     await ui.unmount()
   })
 })

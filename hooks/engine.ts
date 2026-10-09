@@ -16,6 +16,11 @@ import type { VizTheme } from '../types'
 export const FRAME_MS = 33
 /** The longest the animation moves in one step: a longer gap (a stall, a sleep) moves the clocks, not the bars. */
 const MAX_STEP = 250
+/** How often a show wants a frame (the idle show, the vamp): half the full rate. */
+const SHOW_MS = 2 * FRAME_MS
+/** Once Claude has been idle this long, the idle show wants them slower still (8 fps): nobody watches it closely by then. */
+const DROWSY = 5 * 60_000
+const DROWSY_MS = 125
 
 /** What is left of something that halves every `halfLife`, after `ms`. */
 const fade = (halfLife: number, ms: number) => Math.pow(0.5, ms / halfLife)
@@ -315,11 +320,12 @@ export class Spectrum {
   /**
    * The context window measured: `percent` of it in use, and `limit`, the share
    * of it where auto-compact runs (1 when it is off), the top of the meter.
-   * The meter moves there in a moment, or at once when `isInstant`.
+   * The meter moves there in a moment, or at once when `isInstant`; with no
+   * `percent` (nothing reported yet), it empties, unlabeled.
    */
-  measure(percent: number, limit = 1, isInstant = false) {
-    this.contextPercent = Math.max(0, Math.min(100, percent))
-    this.fill = Math.max(0, Math.min(1, percent / 100 / Math.max(0.05, Math.min(1, limit))))
+  measure(percent: number | undefined, limit = 1, isInstant = false) {
+    this.contextPercent = percent === undefined ? undefined : Math.max(0, Math.min(100, percent))
+    this.fill = percent === undefined ? 0 : Math.max(0, Math.min(1, percent / 100 / Math.max(0.05, Math.min(1, limit))))
     if (isInstant) this.gauge = this.fill
     this.glintAt = this.now
   }
@@ -483,6 +489,11 @@ export class Spectrum {
     for (const drop of this.drops) energy += drop.energy * bump(x - drop.x, 0.022)
     if (scanner! > 0) energy += 0.5 * scanner! * bump(x - (0.5 - 0.5 * Math.cos(cycle(this.show, SCAN))), 0.035)
     return energy
+  }
+
+  /** How often the shows want a frame while the music rests. */
+  get showMs(): number {
+    return this.isResting() && this.quietFor >= DROWSY ? DROWSY_MS : SHOW_MS
   }
 
   /** Nothing playing and nothing left to fade. */
@@ -865,6 +876,8 @@ export class Bars {
   private readonly speed: Float64Array
   private readonly tint: Uint32Array
   private readonly rand: () => number
+  /** A theme's colors for the bars, by bar and row, and for each bar's peak cap and floor: worked out once a theme. */
+  private colors?: { theme: VizTheme; bar: Uint32Array; peak: Uint32Array; floor: Uint32Array }
 
   constructor(
     readonly columns: number,
@@ -935,15 +948,31 @@ export class Bars {
     return this.height.every(h => h === 0) && this.peak.every(p => p === 0)
   }
 
+  private colorsOf(theme: VizTheme) {
+    if (this.colors?.theme === theme) return this.colors
+    const { count, rows } = this
+    const palette = THEMES[theme]
+    const colors = { theme, bar: new Uint32Array(count * rows), peak: new Uint32Array(count), floor: new Uint32Array(count) }
+    for (let b = 0; b < count; b++) {
+      const tint = this.tint[b]!
+      for (let r = 0; r < rows; r++) colors.bar[b * rows + r] = palette.bar(r / Math.max(1, rows - 1), tint)
+      colors.peak[b] = palette.peak(tint)
+      colors.floor[b] = palette.floor(tint)
+    }
+    this.colors = colors
+    return colors
+  }
+
   /** The bars as Raster cells; with `labels`, each tool's name over its band. */
   paint(theme: VizTheme, spectrum?: Spectrum, labels = false): string {
     const { columns, rows } = this
     const words = blank(columns * rows)
-    const palette = THEMES[theme]
+    const colors = this.colorsOf(theme)
     const red = (spectrum?.flash ?? 0) * 0.65
     const amber = (spectrum?.cue ?? 0) * 0.8
+    // Amber while the person is waited on, red after an error; most frames neither.
+    const shade = (color: number) => (amber === 0 && red === 0 ? color : mix(mix(color, CUE, amber), ERROR, red))
     for (let b = 0; b < this.count; b++) {
-      const tint = this.tint[b]!
       const h = this.height[b]! * rows
       const p = this.peak[b]! * rows
       const peakRow = this.peak[b]! > 0.03 ? Math.min(rows - 1, Math.floor(p)) : -1
@@ -954,13 +983,13 @@ export class Bars {
         let color: number
         if (fill > 0) {
           glyph = fill >= 1 ? FULL : EIGHTHS[Math.max(1, Math.round(fill * 8))]!
-          color = mix(mix(palette.bar(r / Math.max(1, rows - 1), tint), CUE, amber), ERROR, red)
+          color = shade(colors.bar[b * rows + r]!)
         } else if (r === peakRow) {
           glyph = CAPS[Math.min(2, Math.floor((p - r) * 3))]!
-          color = mix(mix(palette.peak(tint), CUE, amber), ERROR, red)
+          color = shade(colors.peak[b]!)
         } else if (r === 0) {
           glyph = FLOOR
-          color = palette.floor(tint)
+          color = colors.floor[b]!
         } else {
           continue
         }
