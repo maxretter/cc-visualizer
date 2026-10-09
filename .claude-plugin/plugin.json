@@ -1,6 +1,6 @@
 {
   "name": "visualizer",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A music-visualizer spectrum that dances to what Claude is doing: thinking, streaming text, tool calls and their arguments.",
   "author": { "name": "Max Retter" },
   "types": "./types/index.d.ts"
