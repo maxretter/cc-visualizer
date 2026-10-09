@@ -2,6 +2,8 @@
 
 A music visualizer for [Claude Code](https://claude.com/claude-code). A spectrum analyzer above your prompt that moves with what Claude is doing: thinking, streaming its reply, calling tools.
 
+![The band above the Claude Code prompt playing /viz demo: a brainwave while it thinks, then drums, with tool names over their bands](docs/demo.gif)
+
 ```
                           Grep        Write      Bash      WebFetch      Agent
 ▔▔ ▂▂ ▂▂ ▃▃ ▂▂ ▅▅ ▄▄ ▁▁ ▁▁ ██ ▇▇ ▁▁ ▔▔ ▔▔ ▔▔ ▔▔ ▔▔    ▔▔             ▁▁    ── ── ▁▁
@@ -92,6 +94,8 @@ claude plugin test .           # tests/*.test.tsx against the engine
 - `types/index.d.ts`: the plugin's state contract.
 
 Claude Code generates the API typings in `.claude-plugin/types/` when it loads the plugin (they're git-ignored). After that, `tsc -p .` type-checks the plugin.
+
+`scripts/demo-gif/make.sh` remakes `docs/demo.gif`. It starts `claude --plugin-dir .` in a pseudo-terminal, types `/viz demo`, records it, and renders the band and the prompt as a GIF. It needs ffmpeg, and installs pyte in a throwaway virtualenv. The band plays with your saved `/viz` settings, and nothing goes to the model.
 
 ## License
 
