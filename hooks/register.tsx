@@ -2,8 +2,8 @@ import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register, Timer } from 'claude-code'
 
 import type { VizMode, VizPlace, VizSize, VizTheme } from '../types'
-import { Bars, FRAME_MS, Spectrum, THEME_NAMES, sourceOf, trail } from './engine'
-import type { Ask, Call, Layout } from './engine'
+import { Bars, DOCTOR_ROWS, FRAME_MS, Spectrum, THEME_NAMES, sourceOf, swatches, toneOf, trail } from './engine'
+import type { Ask, Call, Layout, Tone } from './engine'
 
 const PANE = 'viz'
 const BAND_ROWS = 5
@@ -48,7 +48,21 @@ const USAGE = [
   '/viz demo               play a few bars without a turn',
   '/viz idle [on|off]      the idle show (with always, or in the pane)',
   `/viz theme [name]       ${THEME_NAMES.join(', ')}`,
+  "/viz ground [auto|light|dark]  your terminal's background (auto follows Claude Code's theme)",
+  "/viz doctor             check your terminal's colors and glyphs against what the band expects",
 ].join('\n')
+
+/** What each of the doctor's swatch rows checks. */
+const DOCTOR_HINTS = [
+  'ramp: smooth where the terminal shows 24-bit color; stripes mean it rounds to 256 colors.',
+  'ground: the halves should be close (near-black beside a dark terminal is fine); white on dark, or black on light, means try /viz ground light or dark.',
+  'fade: its faint end should vanish into the background.',
+  'glyphs: a box or a gap means the font lacks that glyph.',
+]
+
+type Ground = 'auto' | Tone
+const GROUNDS: readonly Ground[] = ['auto', 'light', 'dark']
+const isGround = (v: unknown): v is Ground => GROUNDS.includes(v as Ground)
 
 /** A drawing the frames repaint: its bars, and the raster of tool names beside a mini one. */
 type Site = {
@@ -124,6 +138,23 @@ export const register: Register = on => {
   let modeNow: VizMode = 'auto'
   let themeNow: VizTheme = 'instrument'
   let idleNow = true
+  // The terminal's background: what /viz ground says (auto follows Claude
+  // Code's theme), Claude Code's theme, the terminal's COLORFGBG, and the
+  // tone they come to, which every drawing paints for.
+  let groundNow: Ground = 'auto'
+  let themeSetting: unknown
+  let colorfgbg: string | undefined
+  let toneNow: Tone = 'dark'
+  const retone = () => {
+    toneNow = groundNow === 'auto' ? toneOf(themeSetting, colorfgbg) : groundNow
+  }
+  // Where the tone came from, as /viz ground and the doctor say it.
+  const groundText = () => {
+    if (groundNow !== 'auto') return `${toneNow}, as /viz ground set it`
+    if (typeof themeSetting === 'string' && themeSetting !== 'auto') return `${toneNow}, from Claude Code's ${themeSetting} theme`
+    if (colorfgbg) return `${toneNow}, from the terminal's COLORFGBG (${colorfgbg})`
+    return `${toneNow}, assumed: Claude Code's theme is auto and the terminal doesn't say`
+  }
   // Whether Claude is working, as the prompt's band and hint line are told.
   let isWorking = false
   // The prompt's column less the band's five, as the band above is told it:
@@ -242,8 +273,8 @@ export const register: Register = on => {
       for (const site of sites.values()) site.bars.step(spectrum)
       for (const site of sites.values()) {
         if (site.retryAt !== undefined && spectrum.now < site.retryAt) continue
-        blit(site, site.key, site.bars.paint(themeNow, spectrum, site.labels))
-        if (site.names) blit(site, site.names.key, trail(spectrum, themeNow, site.names.columns, site.names.rows))
+        blit(site, site.key, site.bars.paint(themeNow, spectrum, site.labels, toneNow))
+        if (site.names) blit(site, site.names.key, trail(spectrum, themeNow, site.names.columns, site.names.rows, toneNow))
       }
       if (!spectrum.isCalm()) {
         // Something plays again after a show: back to the full rate.
@@ -279,7 +310,7 @@ export const register: Register = on => {
     await $.command.register({
       name: 'viz',
       description: 'Music visualizer for what Claude is doing',
-      argumentHint: '[auto|always|off|bar|mini|pos <above|below>|pane|demo|idle|theme <name>]',
+      argumentHint: '[auto|always|off|bar|mini|pos [above|below]|pane|demo|idle [on|off]|theme [name]|ground [auto|light|dark]|doctor]',
       immediate: true,
     })
     const prefs = prefsOf(await $.store.get('prefs'))
@@ -299,6 +330,11 @@ export const register: Register = on => {
     const savedPlace = prefs.place
     if (isPlace(savedPlace)) await update($, place, () => savedPlace)
     if (typeof prefs.idle === 'boolean') idleNow = prefs.idle
+    if (isGround(prefs.ground)) groundNow = prefs.ground
+    // The terminal's background, as Claude Code's theme and the terminal tell it.
+    themeSetting = (await $.config.list().catch(() => [])).find(row => row.key === 'theme')?.value
+    colorfgbg = await $.env.get('COLORFGBG').catch(() => undefined)
+    retone()
     // Playing or not as the frames are now: a reload mid-turn may have woken them already.
     await update($, isPlaying, () => ticker !== undefined && tempo === FRAME_MS)
     // The meter as it stood, after a reload or on a resumed session.
@@ -460,6 +496,18 @@ export const register: Register = on => {
     return next(e)
   })
 
+  // Claude Code's theme changed: the band follows it onto a light background or off one.
+  on('config.set', { key: 'theme' }, async ($, e, next) => {
+    const set = await next(e)
+    if (set.deny === undefined) {
+      themeSetting = set.value
+      retone()
+      if (sites.size > 0) wake()
+    }
+
+    return set
+  })
+
   // Auto-compact turned on or off: the top of the meter moves.
   on('config.set', { key: 'autoCompact' }, async ($, e, next) => {
     const set = await next(e)
@@ -508,8 +556,8 @@ export const register: Register = on => {
 
       return (
         <Box width={bodyColumns} justifyContent="flex-end">
-          {names && <Raster key="names" columns={names.columns} rows={rows} cells={trail(spectrum, t, names.columns, rows)} />}
-          <Raster key="mini" columns={columns} rows={rows} cells={site.bars.paint(t, spectrum)} />
+          {names && <Raster key="names" columns={names.columns} rows={rows} cells={trail(spectrum, t, names.columns, rows, toneNow)} />}
+          <Raster key="mini" columns={columns} rows={rows} cells={site.bars.paint(t, spectrum, false, toneNow)} />
         </Box>
       )
     }
@@ -518,7 +566,7 @@ export const register: Register = on => {
     const rows = Math.min(BAND_ROWS, room)
     const site = mount(requestId, 'band', columns, rows, { layout: wide(columns), labels: true })
 
-    return <Raster key="band" columns={columns} rows={rows} cells={site.bars.paint(t, spectrum, true)} />
+    return <Raster key="band" columns={columns} rows={rows} cells={site.bars.paint(t, spectrum, true, toneNow)} />
   }
 
   // Above the prompt: the band in the slot over the input.
@@ -600,8 +648,8 @@ export const register: Register = on => {
 
     return (
       <Box flexDirection="column">
-        <Raster key="pane" columns={columns} rows={rows} cells={site.bars.paint(t, spectrum, true)} />
-        <Raster key="legend" columns={columns} rows={1} cells={site.bars.legend(t)} />
+        <Raster key="pane" columns={columns} rows={rows} cells={site.bars.paint(t, spectrum, true, toneNow)} />
+        <Raster key="legend" columns={columns} rows={1} cells={site.bars.legend(t, toneNow)} />
       </Box>
     )
   })
@@ -616,10 +664,41 @@ export const register: Register = on => {
     return closed
   }).catch(($, e, next) => next(e))
 
+  // /viz doctor's report on the terminal: what it found, then a swatch for
+  // each check beside its name, painted for the background the band paints for.
+  on('ui.render', { component: 'CommandOutput', props: { command: 'viz' } }, async ($, e, next) => {
+    if (e.surface !== 'terminal' || e.props.isErrored || e.props.args.trim().split(/\s+/)[0] !== 'doctor') return next(e)
+    const t = await read($, theme)
+    const { Box, Text, Raster } = $.ui.resolve(e)
+    const facts = e.props.text.split('\n').filter(line => line.startsWith('- '))
+    const columns = 64
+
+    return (
+      <Box flexDirection="column">
+        <Text bold>Visualizer doctor</Text>
+        <Text>{facts.map(fact => fact.slice(2)).join('\n')}</Text>
+        <Box flexDirection="row" marginY={1}>
+          <Box flexDirection="column" width={8}>
+            <Text dimColor>{DOCTOR_ROWS.join('\n')}</Text>
+          </Box>
+          <Raster key="doctor" columns={columns} rows={DOCTOR_ROWS.length} cells={swatches(t, toneNow, columns)} />
+        </Box>
+        <Text dimColor>{DOCTOR_HINTS.join('\n')}</Text>
+      </Box>
+    )
+  })
+
   on('command.run', { command: 'viz' }, async ($, e) => {
     const [verb = '', arg = ''] = e.args.trim().toLowerCase().split(/\s+/)
     const was = await read($, mode)
-    const before = { mode: was, theme: await read($, theme), size: await read($, size), place: await read($, place), idle: idleNow }
+    const before = {
+      mode: was,
+      theme: await read($, theme),
+      size: await read($, size),
+      place: await read($, place),
+      idle: idleNow,
+      ground: groundNow,
+    }
     let m = was
     let t = before.theme
     let z = before.size
@@ -680,6 +759,27 @@ export const register: Register = on => {
         return { text: `No theme "${arg}". Themes: ${THEME_NAMES.join(', ')}.` }
       }
       text = `Visualizer theme: ${t}.`
+    } else if (verb === 'ground') {
+      if (arg !== '' && !isGround(arg)) return { text: 'Usage: /viz ground [auto|light|dark]' }
+      if (isGround(arg)) groundNow = arg
+      retone()
+      text = `Visualizer background: ${groundText()}.`
+    } else if (verb === 'doctor') {
+      // What the terminal and the visualizer say, for the model and any
+      // surface; the terminal draws it with its swatches (CommandOutput).
+      const [term, colorterm, program] = await Promise.all([
+        $.env.get('TERM').catch(() => undefined),
+        $.env.get('COLORTERM').catch(() => undefined),
+        $.env.get('TERM_PROGRAM').catch(() => undefined),
+      ])
+      const isTrue = colorterm === 'truecolor' || colorterm === '24bit'
+      const facts = [
+        `Terminal: ${term ?? 'TERM unset'}${program ? ` (${program})` : ''}, ${isTrue ? '24-bit color' : `COLORTERM ${colorterm ?? 'unset'}, so perhaps 256 colors`}`,
+        `Claude Code theme: ${typeof themeSetting === 'string' ? themeSetting : 'unknown'}`,
+        `Background: ${groundText()}`,
+        `Visualizer: ${m}, ${z} ${p} the prompt, theme ${t}, idle ${idleNow ? 'on' : 'off'}`,
+      ]
+      return { text: ['Visualizer doctor', ...facts.map(fact => `- ${fact}`), '', ...DOCTOR_HINTS].join('\n') }
     } else {
       return { text: USAGE }
     }
@@ -701,7 +801,7 @@ export const register: Register = on => {
     await update($, place, () => p)
     // Save what this command changed over what is saved: another session may
     // have saved the rest since this one read it.
-    const after = { mode: m, theme: t, size: z, place: p, idle: idleNow }
+    const after = { mode: m, theme: t, size: z, place: p, idle: idleNow, ground: groundNow }
     const changed = Object.fromEntries(Object.entries(after).filter(([k, v]) => before[k as keyof typeof before] !== v))
     if (Object.keys(changed).length > 0) {
       await $.store.set('prefs', { ...prefsOf(await $.store.get('prefs')), ...changed })

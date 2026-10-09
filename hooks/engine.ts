@@ -78,6 +78,27 @@ export function sourceOf(tool: string): SourceId {
 
 const bump = (d: number, sigma: number) => Math.exp(-(d * d) / (2 * sigma * sigma))
 
+/** A random value, -1 to 1, for a whole point of a plane: the same point, the same value. */
+function lattice(x: number, y: number): number {
+  let h = Math.imul(x, 0x27d4eb2d) ^ Math.imul(y, 0x165667b1)
+  h = Math.imul(h ^ (h >>> 15), 0x85ebca6b)
+  h ^= h >>> 13
+  return ((h >>> 0) / 4294967296) * 2 - 1
+}
+
+/** Smooth random noise, -1 to 1, at any point of a plane: `lattice` eased between its whole points. */
+function noise(x: number, y: number): number {
+  const xi = Math.floor(x)
+  const yi = Math.floor(y)
+  const u = (x - xi) * (x - xi) * (3 - 2 * (x - xi))
+  const v = (y - yi) * (y - yi) * (3 - 2 * (y - yi))
+  const a = lattice(xi, yi)
+  const b = lattice(xi + 1, yi)
+  const c = lattice(xi, yi + 1)
+  const d = lattice(xi + 1, yi + 1)
+  return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v
+}
+
 /** The idle show's swell at a point of the spectrum, `ms` into the show: a low wave rolling up it, breathing. */
 function drift(x: number, ms: number): number {
   const swell = 0.5 + 0.5 * Math.sin(2 * Math.PI * 1.4 * x - cycle(ms, 5_900))
@@ -140,6 +161,8 @@ const KEYBOARD: readonly (readonly [string, number])[] = [
 ]
 /** While the model thinks, sparks of thought a second on its band: these when it is calm, up to as many more again as its text streams. */
 const SPARKS = 1.5
+/** How long a spark's spike takes to run the length of the brainwave. */
+const SPIKE = 900
 /** How long the demo plays, and how long it thinks before the drums come in. */
 const DEMO = 11_400
 const DEMO_THINK = 2_500
@@ -176,6 +199,8 @@ export class Spectrum {
   restless = 0
   /** Where the thinking's band wanders: its level, the level it heads for, and when it turns for another. */
   private readonly thought = { level: 0, target: 0, turnAt: 0 }
+  /** When the thinking's latest sparks fired, oldest first: each runs along the brainwave as a spike. */
+  readonly sparks: number[] = []
   /** The music's clock: how long it has played, which stands still while the frames stop. */
   now = 0
   /** How far the animation moved at the last step: its length, up to `MAX_STEP`. */
@@ -457,6 +482,7 @@ export class Spectrum {
     if (t - this.glintAt >= GLINT_EVERY) this.glintAt = t
     this.crash = this.crash < 0.004 ? 0 : this.crash * fade(275, ms)
     this.flash = this.flash < 0.01 ? 0 : this.flash * fade(220, ms)
+    while (this.sparks.length > 0 && t - this.sparks[0]! >= SPIKE) this.sparks.shift()
     // The typed notes ring from when they come in.
     for (let i = this.notes.length - 1; i >= 0; i--) {
       const note = this.notes[i]!
@@ -489,9 +515,15 @@ export class Spectrum {
     }
     thought.level = ease(thought.level, thought.target, 110, ms)
     const sparks = SPARKS * (1 + this.restless / 0.45)
-    if (this.rand() < 1 - Math.exp((-sparks * ms) / 1000)) this.hit('think', 0.15 + 0.3 * this.rand())
+    if (this.rand() < 1 - Math.exp((-sparks * ms) / 1000)) this.spark(0.15 + 0.3 * this.rand())
     const i = INDEX.think
     this.level[i] = Math.max(this.level[i]!, thought.level)
+  }
+
+  /** A thought sparks: a flick on the thinking's band, and a spike running along the brainwave. */
+  spark(strength = 0.3) {
+    this.hit('think', strength)
+    this.sparks.push(this.now)
   }
 
   /** The idle show moves on by `ms`: its scenes, and the rain while it falls. */
@@ -702,6 +734,59 @@ export const THEMES: Record<VizTheme, Palette> = {
   classic: stops([[0, 0x16a34a], [0.55, 0x4ade80], [0.7, 0xfacc15], [0.86, 0xf97316], [1, 0xef4444]], 0xf5f5f5, 0x1f3a28),
 }
 
+/** How the terminal's background reads: what faded colors fade into, and what colors must stand out from. */
+export type Tone = 'dark' | 'light'
+
+/** The background each tone stands for. */
+export const GROUND: Record<Tone, number> = { dark: 0x000000, light: 0xffffff }
+
+const linear = (v: number) => (v <= 10 ? v / 3295 : ((v / 255 + 0.055) / 1.055) ** 2.4)
+
+/** How bright a color looks, 0 to 1: its relative luminance. */
+export const luminance = (c: number) => 0.2126 * linear((c >> 16) & 255) + 0.7152 * linear((c >> 8) & 255) + 0.0722 * linear(c & 255)
+
+/** A color that stands out on the tone's background: on a light one, a pale color darkened until it does. */
+export function legible(color: number, tone: Tone): number {
+  let c = color
+  if (tone === 'light') while (luminance(c) > 0.3) c = mix(c, 0, 0.1)
+  return c
+}
+
+/**
+ * Claude Code's theme as a tone: a light theme reads light, a dark one dark,
+ * and `auto` (Claude Code reads the terminal itself) by `COLORFGBG`, which some
+ * terminals set (`15;0`, white on black), else dark, as most terminals are.
+ */
+export function toneOf(theme: unknown, colorfgbg?: string): Tone {
+  if (typeof theme === 'string' && theme.startsWith('light')) return 'light'
+  if (typeof theme === 'string' && theme.startsWith('dark')) return 'dark'
+  const background = Number(colorfgbg?.split(';').at(-1))
+  return Number.isInteger(background) && (background === 7 || background >= 9) ? 'light' : 'dark'
+}
+
+/**
+ * A theme's palette on a tone's background. On a light one its fades go to
+ * white and its colors are darkened to stand out, its peak caps darker than
+ * the bars rather than brighter.
+ */
+function paletteOf(theme: VizTheme, tone: Tone): Palette {
+  const dark = THEMES[theme]
+  if (tone === 'dark') return dark
+  const white = GROUND.light
+  if (theme === 'instrument') {
+    return {
+      bar: (y, tint) => mix(white, legible(tint, tone), 0.45 + 0.55 * y),
+      peak: tint => mix(legible(tint, tone), 0, 0.45),
+      floor: tint => mix(white, legible(tint, tone), 0.3),
+    }
+  }
+  return {
+    bar: (y, tint) => legible(dark.bar(y, tint), tone),
+    peak: tint => mix(legible(dark.bar(1, tint), tone), 0, 0.4),
+    floor: tint => mix(white, legible(dark.bar(0, tint), tone), 0.35),
+  }
+}
+
 /** The instruments' colors blended across the spectrum: a bar's own color. */
 function instrumentColor(x: number): number {
   let r = 0, g = 0, b = 0, total = 0
@@ -782,10 +867,10 @@ function write(words: Uint32Array, columns: number, row: number, start: number, 
   }
 }
 
-/** A tool's name in the color of the theme, as strong as the call's name shows. */
-function nameColor(theme: VizTheme, source: SourceId, strength: number): number {
-  const color = theme === 'instrument' ? SOURCES[INDEX[source]]!.color : THEMES[theme].peak(0)
-  return mix(0, color, strength)
+/** A tool's name in the color of the theme, as strong as the call's name shows, faded into the background. */
+function nameColor(theme: VizTheme, source: SourceId, strength: number, tone: Tone): number {
+  const color = theme === 'instrument' ? legible(SOURCES[INDEX[source]]!.color, tone) : paletteOf(theme, tone).peak(0)
+  return mix(GROUND[tone], color, strength)
 }
 
 const label = (call: Call) => (call.count > 1 ? `${call.name}\u00d7${call.count}` : call.name)
@@ -858,8 +943,10 @@ const idleName = (spectrum: Spectrum): Named | undefined =>
       }
     : undefined
 
-const nameColorOf = (theme: VizTheme, name: Named, strength: number) =>
-  name.color === undefined ? nameColor(theme, name.source, strength) : mix(0, name.color, strength)
+const nameColorOf = (theme: VizTheme, name: Named, strength: number, tone: Tone) =>
+  name.color === undefined
+    ? nameColor(theme, name.source, strength, tone)
+    : mix(GROUND[tone], legible(name.color, tone), strength)
 
 const thinkingName = (spectrum: Spectrum): Named | undefined =>
   spectrum.mind > 0.05 ? { text: 'thinking', source: 'think', strength: spectrum.mind, isRunning: spectrum.thinking > 0 } : undefined
@@ -875,10 +962,10 @@ const callName = (spectrum: Spectrum, call: Call): Named => ({
  * The latest tools' names along the bottom row, newest at the right edge
  * (beside a mini spectrum), a spinner before each one still running.
  */
-export function trail(spectrum: Spectrum, theme: VizTheme, columns: number, rows: number): string {
+export function trail(spectrum: Spectrum, theme: VizTheme, columns: number, rows: number, tone: Tone = 'dark'): string {
   const words = blank(columns * rows)
   const row = rows - 1
-  const dot = mix(0, LEGEND_GRAY, 0.6)
+  const dot = mix(GROUND[tone], legible(LEGEND_GRAY, tone), 0.6)
   const thinking = thinkingName(spectrum)
   const status = statusName(spectrum)
   const names = spectrum.calls.map(call => callName(spectrum, call)).reverse()
@@ -897,16 +984,56 @@ export function trail(spectrum: Spectrum, theme: VizTheme, columns: number, rows
       write(words, columns, row, end - gap, ' \u00b7 ', dot)
       end -= gap
     }
-    write(words, columns, row, end - text.length, text, nameColorOf(theme, name, strength))
+    write(words, columns, row, end - text.length, text, nameColorOf(theme, name, strength, tone))
     end -= text.length
     if (spin > 0) {
       const cell = (row * columns + end - 2) * 3
       words[cell] = SPINNER[Math.floor(spectrum.now / SPIN) % SPINNER.length]!
-      words[cell + 1] = nameColorOf(theme, name, 1)
+      words[cell + 1] = nameColorOf(theme, name, 1, tone)
       end -= spin
     }
     placed += 1
   }
+  return base64(new Uint8Array(words.buffer))
+}
+
+/** The checks `/viz doctor` draws, a row each. */
+export const DOCTOR_ROWS = ['ramp', 'colors', 'ground', 'fade', 'glyphs'] as const
+
+/**
+ * `/viz doctor`'s swatches, `columns` wide, for a background of `tone`, a row
+ * for each check: the theme's colors as a ramp (smooth where the terminal
+ * shows 24-bit color, banded where it does not); the instruments' colors; the
+ * background the visualizer expects beside the terminal's own, which should
+ * look the same; a fade into it, whose faint end should vanish; and the
+ * glyphs the band draws with, which the font must have.
+ */
+export function swatches(theme: VizTheme, tone: Tone, columns: number): string {
+  const words = blank(columns * DOCTOR_ROWS.length)
+  const palette = paletteOf(theme, tone)
+  const put = (row: number, column: number, glyph: number, fg: number, bg = DEFAULT) => {
+    const i = (row * columns + column) * 3
+    words[i] = glyph
+    words[i + 1] = fg
+    words[i + 2] = bg
+  }
+  const gray = legible(LEGEND_GRAY, tone)
+  const half = Math.floor(columns / 2)
+  const width = Math.floor(columns / SOURCES.length)
+  for (let c = 0; c < columns; c++) {
+    const x = c / Math.max(1, columns - 1)
+    put(0, c, FULL, palette.bar(theme === 'instrument' ? 1 : x, instrumentColor(x)))
+    put(3, c, FULL, mix(GROUND[tone], legible(CUE, tone), x))
+  }
+  SOURCES.forEach((source, s) => {
+    const bg = legible(source.color, tone)
+    const ink = luminance(bg) > 0.3 ? 0x000000 : 0xffffff
+    for (let c = 0; c < width; c++) put(1, s * width + c, source.label.charCodeAt(c - 1) || SPACE, ink, bg)
+  })
+  for (let c = 0; c < columns; c++) put(2, c, SPACE, gray, c < half ? DEFAULT : GROUND[tone])
+  write(words, columns, 2, 1, 'your terminal', gray)
+  write(words, columns, 2, half + 1, 'what is expected', gray)
+  write(words, columns, 4, 0, '▁▂▃▄▅▆▇█ ▔─▁ ⣿⡇⠿⠛⣀⠉ ░░ ⠋⠙⠹⠸⠼⠴ ×·', gray)
   return base64(new Uint8Array(words.buffer))
 }
 
@@ -958,8 +1085,11 @@ export class Bars {
   private readonly speed: Float64Array
   private readonly tint: Uint32Array
   private readonly rand: () => number
-  /** A theme's colors for the bars, by bar and row, and for each bar's peak cap and floor: worked out once a theme. */
-  private colors?: { theme: VizTheme; bar: Uint32Array; peak: Uint32Array; floor: Uint32Array }
+  /**
+   * A theme's colors on a tone's background, worked out once each: the bars by
+   * bar and row, each bar's peak cap and floor, and the amber and red they turn.
+   */
+  private colors?: { theme: VizTheme; tone: Tone; bar: Uint32Array; peak: Uint32Array; floor: Uint32Array; cue: number; error: number }
 
   constructor(
     readonly columns: number,
@@ -1030,11 +1160,19 @@ export class Bars {
     return this.height.every(h => h === 0) && this.peak.every(p => p === 0)
   }
 
-  private colorsOf(theme: VizTheme) {
-    if (this.colors?.theme === theme) return this.colors
+  private colorsOf(theme: VizTheme, tone: Tone) {
+    if (this.colors?.theme === theme && this.colors.tone === tone) return this.colors
     const { count, rows } = this
-    const palette = THEMES[theme]
-    const colors = { theme, bar: new Uint32Array(count * rows), peak: new Uint32Array(count), floor: new Uint32Array(count) }
+    const palette = paletteOf(theme, tone)
+    const colors = {
+      theme,
+      tone,
+      bar: new Uint32Array(count * rows),
+      peak: new Uint32Array(count),
+      floor: new Uint32Array(count),
+      cue: legible(CUE, tone),
+      error: legible(ERROR, tone),
+    }
     for (let b = 0; b < count; b++) {
       const tint = this.tint[b]!
       for (let r = 0; r < rows; r++) colors.bar[b * rows + r] = palette.bar(r / Math.max(1, rows - 1), tint)
@@ -1045,15 +1183,15 @@ export class Bars {
     return colors
   }
 
-  /** The bars as Raster cells; with `labels`, each tool's name over its band. */
-  paint(theme: VizTheme, spectrum?: Spectrum, labels = false): string {
+  /** The bars as Raster cells, for a background of `tone`; with `labels`, each tool's name over its band. */
+  paint(theme: VizTheme, spectrum?: Spectrum, labels = false, tone: Tone = 'dark'): string {
     const { columns, rows } = this
     const words = blank(columns * rows)
-    const colors = this.colorsOf(theme)
+    const colors = this.colorsOf(theme, tone)
     const red = (spectrum?.flash ?? 0) * 0.65
     const amber = (spectrum?.cue ?? 0) * 0.8
     // Amber while the person is waited on, red after an error; most frames neither.
-    const shade = (color: number) => (amber === 0 && red === 0 ? color : mix(mix(color, CUE, amber), ERROR, red))
+    const shade = (color: number) => (amber === 0 && red === 0 ? color : mix(mix(color, colors.cue, amber), colors.error, red))
     for (let b = 0; b < this.count; b++) {
       const h = this.height[b]! * rows
       const p = this.peak[b]! * rows
@@ -1083,9 +1221,9 @@ export class Bars {
         }
       }
     }
-    if (this.meter && spectrum !== undefined) this.paintMeter(words, spectrum)
-    if (spectrum !== undefined && spectrum.mind > 0) this.brainwave(words, theme, spectrum)
-    if (labels && spectrum !== undefined) this.label(words, theme, spectrum)
+    if (this.meter && spectrum !== undefined) this.paintMeter(words, spectrum, tone)
+    if (spectrum !== undefined && spectrum.mind > 0) this.brainwave(words, theme, spectrum, tone)
+    if (labels && spectrum !== undefined) this.label(words, theme, spectrum, tone)
     return base64(new Uint8Array(words.buffer))
   }
 
@@ -1094,15 +1232,15 @@ export class Bars {
    * top, green, then amber, then red, its empty cells a dim track; now and
    * then a glint runs up it.
    */
-  private paintMeter(words: Uint32Array, spectrum: Spectrum) {
+  private paintMeter(words: Uint32Array, spectrum: Spectrum, tone: Tone) {
     const { columns, rows } = this
     const level = spectrum.gauge * rows
-    const track = mix(0, LEGEND_GRAY, 0.22)
+    const track = mix(GROUND[tone], LEGEND_GRAY, 0.22)
     const glint = spectrum.glint
     for (let r = 0; r < rows; r++) {
       const fill = level - r
       const top = Math.min(level, r + 1) / rows
-      const color = METER[top >= RED_AT ? 2 : top >= AMBER_AT ? 1 : 0]!
+      const color = legible(METER[top >= RED_AT ? 2 : top >= AMBER_AT ? 1 : 0]!, tone)
       const glyph = fill >= 1 ? FULL : fill > 0 ? EIGHTHS[Math.max(1, Math.round(fill * 8))]! : SHADE
       for (let c = 0; c < this.width; c++) {
         let shine = 0
@@ -1120,25 +1258,42 @@ export class Bars {
   }
 
   /**
-   * While Claude thinks: a slow wave of braille dots rolling through the cells
-   * above the bars, busier as thinking text streams in, a pulse running along it.
+   * While Claude thinks: a wave of braille dots wandering through the cells
+   * above the bars, never the same twice, busier as thinking text streams in,
+   * each spark of thought a spike running along it, and a glow drifting on it.
    */
-  private brainwave(words: Uint32Array, theme: VizTheme, spectrum: Spectrum) {
+  private brainwave(words: Uint32Array, theme: VizTheme, spectrum: Spectrum, tone: Tone) {
     const { columns, rows } = this
-    const { mind, restless, now } = spectrum
+    const { mind, restless, now, sparks } = spectrum
+    const t = now / 1000
     const dotColumns = this.span * 2
     // Above the floor row, so it never threads between the bars' feet.
     const dotRows = Math.max(1, rows - 1) * 4
     const masks = new Uint8Array(columns * rows)
     const middle = (dotRows - 1) * 0.5
     const reach = dotRows * 0.4 * (0.35 + 0.65 * mind)
+    // Noise rolling along the wave while its shape turns, a finer ripple on it
+    // as the thinking gets restless; centered on its own mean, as the noise
+    // can lean one way for seconds.
+    const waves = new Float64Array(dotColumns)
+    let sum = 0
+    for (let x = 0; x < dotColumns; x++) {
+      const u = x / dotColumns
+      waves[x] =
+        1.4 * noise(u * 2.5 - t * 0.8, t * 0.3) +
+        0.6 * noise(u * 6 + t * 1.1, 17 + t * 0.7) +
+        (0.2 + restless) * noise(u * 17 - t * 2.6, 41 + t * 1.6)
+      sum += waves[x]!
+    }
+    const mean = sum / dotColumns
     let previous: number | undefined
     for (let x = 0; x < dotColumns; x++) {
       const u = x / dotColumns
-      const wave =
-        0.55 * Math.sin(2 * Math.PI * 1.3 * u + cycle(now, 1_090)) +
-        0.3 * Math.sin(2 * Math.PI * 3.1 * u - cycle(now, 1_880) + 1.3) +
-        (0.12 + restless) * Math.sin(2 * Math.PI * 8.3 * u + cycle(now, 390))
+      let wave = waves[x]! - mean
+      for (const at of sparks) {
+        const run = (now - at) / SPIKE
+        if (run >= 0 && run < 1) wave -= 1.6 * (1 - run) * bump(u - run, 0.018)
+      }
       const y = Math.max(0, Math.min(dotRows - 1, Math.round(middle + reach * wave)))
       const from = previous ?? y
       for (let dot = Math.min(from, y); dot <= Math.max(from, y); dot++) {
@@ -1147,13 +1302,13 @@ export class Bars {
       }
       previous = y
     }
-    const base = theme === 'instrument' ? MIND : THEMES[theme].bar(0.8, 0)
+    const base = legible(theme === 'instrument' ? MIND : THEMES[theme].bar(0.8, 0), tone)
     for (let cell = 0; cell < masks.length; cell++) {
       const i = cell * 3
       if (masks[cell] === 0 || words[i] !== SPACE) continue
-      const pulse = 0.75 + 0.25 * Math.sin(((cell % columns) / this.span) * 14 - cycle(now, 690))
+      const pulse = 0.75 + 0.25 * noise(((cell % columns) / this.span) * 5 - t * 1.8, 7 + t * 0.4)
       words[i] = BRAILLE + masks[cell]!
-      words[i + 1] = mix(0, base, (0.3 + 0.7 * mind) * pulse)
+      words[i + 1] = mix(GROUND[tone], base, (0.3 + 0.7 * mind) * pulse)
     }
   }
 
@@ -1162,17 +1317,17 @@ export class Bars {
    * the context's fill at the right by the meter, and the newest call of each
    * tool band, its name over the band, between.
    */
-  private label(words: Uint32Array, theme: VizTheme, spectrum: Spectrum) {
+  private label(words: Uint32Array, theme: VizTheme, spectrum: Spectrum, tone: Tone) {
     let free = 0
     let end = this.span
     const context = this.meter ? contextName(spectrum) : undefined
     if (context !== undefined && context.text.length < this.span) {
-      write(words, this.columns, 0, end - context.text.length, context.text, nameColorOf(theme, context, context.strength))
+      write(words, this.columns, 0, end - context.text.length, context.text, nameColorOf(theme, context, context.strength, tone))
       end -= context.text.length + 1
     }
     const status = statusName(spectrum)
     if (status !== undefined && this.offset + status.text.length <= end) {
-      write(words, this.columns, 0, this.offset, status.text, nameColorOf(theme, status, status.strength))
+      write(words, this.columns, 0, this.offset, status.text, nameColorOf(theme, status, status.strength, tone))
       free = this.offset + status.text.length + 1
     }
     for (const source of SOURCES) {
@@ -1185,13 +1340,13 @@ export class Bars {
       const { text } = name
       const start = Math.max(free, Math.min(end - text.length, this.columnAt(source.at) - Math.floor(text.length / 2)))
       if (start < 0 || start + text.length > end) continue
-      write(words, this.columns, 0, start, text, nameColor(theme, source.id, name.strength))
+      write(words, this.columns, 0, start, text, nameColor(theme, source.id, name.strength, tone))
       free = start + text.length + 1
     }
   }
 
   /** One row naming the instruments under their place on the spectrum. */
-  legend(theme: VizTheme): string {
+  legend(theme: VizTheme, tone: Tone = 'dark'): string {
     const words = blank(this.columns)
     let free = 0
     for (const s of SOURCES) {
@@ -1199,7 +1354,7 @@ export class Bars {
       if (start < 0 || start + s.label.length > this.span) continue
       for (let k = 0; k < s.label.length; k++) {
         words[(start + k) * 3] = s.label.charCodeAt(k)
-        words[(start + k) * 3 + 1] = theme === 'instrument' ? s.color : LEGEND_GRAY
+        words[(start + k) * 3 + 1] = legible(theme === 'instrument' ? s.color : LEGEND_GRAY, tone)
       }
       free = start + s.label.length + 1
     }

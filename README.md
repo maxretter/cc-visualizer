@@ -11,7 +11,7 @@ A music visualizer for [Claude Code](https://claude.com/claude-code). A spectrum
 ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ██ ▆▆ ▅▅ ▃▃ ▃▃ ▄▄ ▄▄ ▆▆ ██ ██ ██
 ```
 
-While Claude thinks, a brainwave rolls above the bars:
+While Claude thinks, a brainwave wanders above the bars, never the same twice, and each spark of thought sends a spike along it:
 
 ```
 thinking⢤⣀  ⢀⣠⠖⠋⠉⠉⠳⢤⡀     ⢀⣀⣀        ⢀⣀⣀                ⣠⠖⠒⠲⢤⡀    ⢀⣠⠤⠤⣄⡀
@@ -79,8 +79,12 @@ This needs a Claude Code build with plugin function hooks: it was built against 
 | `/viz demo` | play a few seconds of thinking and drums without a turn |
 | `/viz idle [on\|off]` | the idle show (on by default); off leaves the bars flat |
 | `/viz theme [name]` | `instrument` (default), `claude`, `synthwave`, `classic`; no name cycles |
+| `/viz ground [auto\|light\|dark]` | your terminal's background; `auto` (default) follows Claude Code's theme; no argument says what it's using |
+| `/viz doctor` | check your terminal's colors and glyphs against what the band expects |
 
-`/viz bar`, `/viz mini` and `/viz pos` close the pane, since the band steps aside while it's open. Your mode, size, position, theme and idle setting are remembered across sessions. There's no position at the top of the screen: Claude Code keeps nothing pinned there for a plugin to draw in. The pane is the closest.
+`/viz bar`, `/viz mini` and `/viz pos` close the pane, since the band steps aside while it's open. Your mode, size, position, theme, idle setting and background are remembered across sessions.
+
+On a light terminal the band paints for the light background: colors fade to white rather than black, and pale ones are darkened until they stand out. It follows Claude Code's theme (`/config`): a light theme means a light background. With the `auto` theme, the band reads the terminal's `COLORFGBG` if it's set, and otherwise assumes dark; `/viz ground light` settles it. `/viz doctor` shows what it found, with a swatch of the background it expects beside your terminal's own. There's no position at the top of the screen: Claude Code keeps nothing pinned there for a plugin to draw in. The pane is the closest.
 
 ## Development
 
