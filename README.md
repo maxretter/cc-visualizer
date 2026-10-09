@@ -45,6 +45,8 @@ Each kind of activity is an instrument with its own place on the spectrum, low t
 - **Tool calls:** a hit on the tool's band, then a held note while it runs. Its name shows over the band and fades a few seconds after it finishes.
 - **Prompts and turns:** sending a prompt sweeps up the spectrum. Finishing a turn crashes a cymbal, and interrupting one sweeps back down.
 - **Errors:** a tool error flashes the bars red.
+- **Waiting on you:** when Claude asks your permission, or asks you a question, the bars turn amber and the waiting tool's band pulses in time, labeled `waiting on you` with how long it's been. After half a minute the pulses shrink. A permission ask waits 1.5 seconds before the pulse starts, so an ask that auto mode settles on its own doesn't flash it. The pulse stops once the tool runs (for Bash, when its run-in-background hint shows) or finishes. Claude Code hides the band above the prompt while a dialog is up, so this shows in the pane (`/viz pane`).
+- **Context:** a meter at the right edge fills as the context window does, green, then amber, then red, its top where auto-compact runs. Every 10 seconds, and when a new reading comes in, a glint runs up it. The band and the pane label it `context 72%`, the share of the window in use. Compacting sweeps down the spectrum, labeled `compacting`, until it's done, and the meter drains.
 - **Idle:** a band that stays up (`/viz always`, or the pane) plays a low show while nothing happens, labeled `idle` with how long it's been: a rolling swell, rain, and a scanner sweeping back and forth, 20 seconds each, drawn at half the frame rate. Otherwise the animation stops once the bars have fallen.
 
 ## Install
@@ -67,14 +69,15 @@ This needs a Claude Code build with plugin function hooks: it was built against 
 | `/viz auto` | show it while Claude works (default) |
 | `/viz always` | keep it up, with an idle show while quiet |
 | `/viz off` | hide it, and close the pane |
+| `/viz bar` | the band across the whole width (default) |
 | `/viz mini` | a small spectrum at the right edge, with tool names beside it |
-| `/viz full` | the band across the whole width |
+| `/viz pos [above\|below]` | the band above the prompt (default), or below it, over the hint line; no place switches |
 | `/viz pane` | a big view with a legend (docked beside the transcript in fullscreen) |
 | `/viz demo` | play a few seconds of thinking and drums without a turn |
 | `/viz idle [on\|off]` | the idle show (on by default); off leaves the bars flat |
 | `/viz theme [name]` | `instrument` (default), `claude`, `synthwave`, `classic`; no name cycles |
 
-Your mode, size, theme and idle setting are remembered across sessions.
+`/viz bar`, `/viz mini` and `/viz pos` close the pane, since the band steps aside while it's open. Your mode, size, position, theme and idle setting are remembered across sessions. There's no position at the top of the screen: Claude Code keeps nothing pinned there for a plugin to draw in. The pane is the closest.
 
 ## Development
 
