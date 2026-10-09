@@ -178,23 +178,29 @@ describe('engine', () => {
 
 describe('time', () => {
   test('the music keeps time at any frame rate', () => {
-    // A prompt's sweep, an error's flash, thinking, the meter filling: 600 ms of it at 60, 30 and 15 ms a frame.
-    const played = (step: number) => {
+    // A prompt's sweep, an error's flash, the meter filling, and apart, the
+    // brainwave coming in: 600 ms of each at 60, 30 and 15 ms a frame.
+    const played = (step: number, start: (spectrum: Spectrum) => void) => {
       const spectrum = new Spectrum()
-      spectrum.kick()
-      spectrum.error()
-      spectrum.beginThinking()
-      spectrum.measure(60)
+      start(spectrum)
       for (let t = 0; t < 600; t += step) spectrum.step(step)
       return spectrum
     }
-    const full = played(30)
-    for (const other of [played(60), played(15)]) {
+    const sent = (s: Spectrum) => {
+      s.kick()
+      s.error()
+      s.measure(60)
+    }
+    const thinking = (s: Spectrum) => s.beginThinking()
+    const full = played(30, sent)
+    for (const step of [60, 15]) {
+      const other = played(step, sent)
       expect(other.now).toBe(600)
-      const reads: ((s: Spectrum) => number)[] = [s => s.flash, s => s.mind, s => s.gauge, s => s.at(0.9)]
+      const reads: ((s: Spectrum) => number)[] = [s => s.flash, s => s.gauge, s => s.at(0.9)]
       for (const read of reads) {
         expect(Math.abs(read(other) - read(full))).toBeLessThan(1e-6)
       }
+      expect(Math.abs(played(step, thinking).mind - played(30, thinking).mind)).toBeLessThan(1e-6)
     }
     // The sweep crossed the spectrum at its own speed, not a step's.
     expect(full.at(0.9)).toBeGreaterThan(full.at(0.6) + 0.5)
@@ -282,6 +288,24 @@ describe('thinking', () => {
     expect(spectrum.mind).toBe(0)
     expect(text(bars.paint('instrument', spectrum), 80).join('')).not.toMatch(braille)
     expect(spectrum.isQuiet()).toBe(true)
+  })
+
+  test('the thinking band wanders, with sparks, rather than keeping a beat', () => {
+    const spectrum = new Spectrum()
+    spectrum.beginThinking()
+    const levels: number[] = []
+    for (let t = 0; t < 6000; t += FRAME_MS) {
+      spectrum.step()
+      levels.push(spectrum.level[0]!)
+    }
+    const settled = levels.slice(30)
+    expect(Math.min(...settled)).toBeGreaterThan(0.05)
+    expect(Math.max(...settled) - Math.min(...settled)).toBeGreaterThan(0.25)
+    // Its peaks come at uneven gaps: no steady pulse.
+    const peaks = settled.flatMap((level, i) => (i > 0 && level > settled[i - 1]! && level >= (settled[i + 1] ?? 0) ? [i] : []))
+    const gaps = peaks.slice(1).map((at, i) => at - peaks[i]!)
+    expect(peaks.length).toBeGreaterThan(8)
+    expect(Math.max(...gaps) - Math.min(...gaps)).toBeGreaterThan(10)
   })
 
   test('thinking is named in the trail and over its band', () => {

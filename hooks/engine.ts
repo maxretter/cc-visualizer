@@ -111,6 +111,8 @@ const SCENE_FADE = 2_000
 const SCAN = 8_000
 /** Drops a second at the height of the rain. */
 const RAIN = 6
+/** While the model thinks, sparks of thought a second on its band: these when it is calm, up to as many more again as its text streams. */
+const SPARKS = 1.5
 /** How long the demo plays, and how long it thinks before the drums come in. */
 const DEMO = 11_400
 const DEMO_THINK = 2_500
@@ -145,6 +147,8 @@ export class Spectrum {
   mind = 0
   /** How busy the thinking is, from its streamed text: 0 to 0.45. */
   restless = 0
+  /** Where the thinking's band wanders: its level, the level it heads for, and when it turns for another. */
+  private readonly thought = { level: 0, target: 0, turnAt: 0 }
   /** The music's clock: how long it has played, which stands still while the frames stop. */
   now = 0
   /** How far the animation moved at the last step: its length, up to `MAX_STEP`. */
@@ -373,10 +377,8 @@ export class Spectrum {
       this.hits[i] = 0
       this.feed[i] = 0
     }
-    if (this.thinking > 0) {
-      const i = INDEX.think
-      this.level[i] = Math.max(this.level[i]!, 0.16 + 0.1 * Math.sin(cycle(t, 1_730)))
-    }
+    if (this.thinking > 0) this.wander(ms)
+    else this.thought.level = 0
     // Each eases toward where it is heading, or dies away, by its half-life.
     const mind = this.thinking > 0 ? Math.min(1, 0.6 + this.restless) : 0
     this.mind = ease(this.mind, mind, mind > this.mind ? 180 : 220, ms)
@@ -412,6 +414,24 @@ export class Spectrum {
     if (idle === 0 && this.idle < 0.01) this.idle = 0
     if (this.idle > 0) this.play(ms)
     else this.drops.length = 0
+  }
+
+  /**
+   * While the model thinks, its band wanders, `ms` on: it drifts toward a level
+   * picked at random, turning for another every so often, and now and then a
+   * thought sparks, more often and sooner as thinking text streams in.
+   */
+  private wander(ms: number) {
+    const thought = this.thought
+    if (this.now >= thought.turnAt) {
+      thought.target = 0.08 + 0.3 * this.rand()
+      thought.turnAt = this.now + (150 + 500 * this.rand()) * (1 - this.restless)
+    }
+    thought.level = ease(thought.level, thought.target, 110, ms)
+    const sparks = SPARKS * (1 + this.restless / 0.45)
+    if (this.rand() < 1 - Math.exp((-sparks * ms) / 1000)) this.hit('think', 0.15 + 0.3 * this.rand())
+    const i = INDEX.think
+    this.level[i] = Math.max(this.level[i]!, thought.level)
   }
 
   /** The idle show moves on by `ms`: its scenes, and the rain while it falls. */
@@ -545,7 +565,7 @@ export class Spectrum {
         this.isDemoThinking = true
         this.beginThinking()
       }
-      this.stream('think', (6 + 6 * Math.sin(cycle(elapsed, 1_040))) * frames)
+      this.stream('think', 12 * this.rand() * frames)
       return
     }
     if (this.isDemoThinking) {

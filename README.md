@@ -33,7 +33,7 @@ Each kind of activity is an instrument with its own place on the spectrum, low t
 
 | Band | Driven by |
 | --- | --- |
-| think | thinking tokens, plus a slow pulse while waiting for the model |
+| think | thinking tokens, plus a restless wander with sparks while waiting for the model |
 | text | the reply as it streams |
 | read | Read, Grep, Glob |
 | edit | Edit, Write, NotebookEdit |
