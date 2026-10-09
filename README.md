@@ -94,9 +94,11 @@ claude plugin validate .       # what the engine sees and would refuse
 claude plugin test .           # tests/*.test.tsx against the engine
 ```
 
-- `hooks/engine.ts`: the simulation and drawing. It's pure, so it's easy to test.
-- `hooks/register.tsx`: the hooks that feed the engine, the drawing sites and `/viz`.
+- `hooks/engine.ts`: the music and its drawing. It's pure, so it's easy to test.
+- `hooks/viz.ts`: the plugin's decisions: your saved settings, what each `/viz` command does, when the band shows, how fast the frames run. Also pure.
+- `hooks/register.tsx`: the hooks. They read what Claude Code tells them, ask the two modules above, and do what they say.
 - `types/index.d.ts`: the plugin's state contract.
+- `tests/`: `viz.test.ts` tests the decisions on their own; `visualizer.test.tsx` tests the engine, and the hooks through Claude Code's test harness.
 
 Claude Code generates the API typings in `.claude-plugin/types/` when it loads the plugin (they're git-ignored). After that, `tsc -p .` type-checks the plugin.
 

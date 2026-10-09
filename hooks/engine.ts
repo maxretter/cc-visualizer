@@ -336,6 +336,18 @@ export class Spectrum {
     }
   }
 
+  /**
+   * The person edited the prompt's `text`, putting `inputText` in for the span
+   * from `start` to `end`: what went in plays, else what went out, else the
+   * caret only moved.
+   */
+  edited(text: string, start: number, end: number, inputText: string) {
+    const erased = text.slice(start, end)
+    if (inputText !== '') this.typed(inputText)
+    else if (erased !== '') this.typed(erased, true)
+    else this.moved(text.length === 0 ? 0.5 : start / text.length)
+  }
+
   /** The prompt's caret moved, to `x` of the way through the text: a faint tick there. */
   moved(x: number) {
     this.notes.push({ x: 0.06 + 0.88 * Math.max(0, Math.min(1, x)), at: this.now, energy: 0.25, sigma: 0.02 })
@@ -346,6 +358,16 @@ export class Spectrum {
     this.sweep = 0
     this.sweepDirection = 1
     this.sweepSpeed = 1.5
+  }
+
+  /**
+   * A turn ended, for `reason`: an answer crashes a cymbal (a subagent's
+   * softer), an interrupt sweeps back down, anything else flashes red.
+   */
+  ended(reason: string, isSubagent = false) {
+    if (reason === 'aborted') this.scratch()
+    else if (reason === 'answer') this.cymbal(isSubagent ? 0.4 : 1)
+    else this.error()
   }
 
   /** A sweep down: the turn was interrupted. */
@@ -689,6 +711,49 @@ export class Spectrum {
   }
 }
 
+/** A piece of a model's response as it streams, as much of it as the music needs. */
+export type Chunk = { kind: string; text?: string; name?: string; json?: string }
+
+/**
+ * One model request as it streams. It thinks from the request until its
+ * first text or tool call, and again whenever it thinks anew: the sub-bass
+ * and the brainwave. Its text is the bass, a tool call it writes a hit on
+ * that tool's band, the call's arguments hats. A subagent's plays softer.
+ */
+export class Step {
+  private isThinking = true
+  private readonly gain: number
+
+  constructor(
+    private readonly spectrum: Spectrum,
+    isSubagent = false,
+  ) {
+    this.gain = isSubagent ? 0.6 : 1
+    spectrum.beginThinking()
+  }
+
+  /** A chunk of the response came in. */
+  hear(chunk: Chunk) {
+    const { spectrum, gain } = this
+    const isThought = chunk.kind === 'thinking'
+    if (isThought !== this.isThinking && (isThought || chunk.kind === 'text' || chunk.kind === 'tool')) {
+      this.isThinking = isThought
+      if (isThought) spectrum.beginThinking()
+      else spectrum.endThinking()
+    }
+    if (chunk.kind === 'text') spectrum.stream('text', chunk.text?.length ?? 0, gain)
+    else if (chunk.kind === 'thinking') spectrum.stream('think', chunk.text?.length ?? 0, gain)
+    else if (chunk.kind === 'tool') spectrum.hit(sourceOf(chunk.name ?? ''), 0.8 * gain)
+    else if (chunk.kind === 'input') spectrum.stream('args', chunk.json?.length ?? 0, gain)
+  }
+
+  /** The stream is over, however it ended: the thinking stops with it. */
+  end() {
+    if (this.isThinking) this.spectrum.endThinking()
+    this.isThinking = false
+  }
+}
+
 // Colors -------------------------------------------------------------------
 
 const clamp255 = (v: number) => Math.max(0, Math.min(255, Math.round(v)))
@@ -831,9 +896,14 @@ const MIND = 0xa78bfa
 
 const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
 
+/** Bytes as standard padded base64, as `Raster` cells take them: the runtime's own encoder where it has one. */
 export function base64(bytes: Uint8Array): string {
   const native = (bytes as Uint8Array & { toBase64?: () => string }).toBase64
-  if (typeof native === 'function') return native.call(bytes)
+  return typeof native === 'function' ? native.call(bytes) : encodeBase64(bytes)
+}
+
+/** Standard padded base64, by hand: for a runtime without `toBase64`. */
+export function encodeBase64(bytes: Uint8Array): string {
   let out = ''
   for (let i = 0; i < bytes.length; i += 3) {
     const a = bytes[i]!
@@ -1190,7 +1260,8 @@ export class Bars {
     const colors = this.colorsOf(theme, tone)
     const red = (spectrum?.flash ?? 0) * 0.65
     const amber = (spectrum?.cue ?? 0) * 0.8
-    // Amber while the person is waited on, red after an error; most frames neither.
+    // Amber while the person is waited on, red after an error, the floor too,
+    // so either shows on bars that have fallen; most frames neither.
     const shade = (color: number) => (amber === 0 && red === 0 ? color : mix(mix(color, colors.cue, amber), colors.error, red))
     for (let b = 0; b < this.count; b++) {
       const h = this.height[b]! * rows
@@ -1209,7 +1280,7 @@ export class Bars {
           color = shade(colors.peak[b]!)
         } else if (r === 0) {
           glyph = FLOOR
-          color = colors.floor[b]!
+          color = shade(colors.floor[b]!)
         } else {
           continue
         }

@@ -11,7 +11,9 @@ import {
   IDLE_DELAY,
   SOURCES,
   Spectrum,
+  Step,
   clockText,
+  encodeBase64,
   idleText,
   legible,
   luminance,
@@ -23,6 +25,8 @@ import {
   toneOf,
   trail,
 } from '../hooks/engine'
+import type { Chunk, SourceId } from '../hooks/engine'
+import { PANE_WAITS } from '../hooks/viz'
 
 /** The glyphs of Raster cells, row by row. */
 const text = (cells: string, columns: number): string[] => {
@@ -78,15 +82,36 @@ const prefsStore = (on: On, initial?: Record<string, unknown>) => {
   return saved
 }
 
-/** How `staged` sets the session up: the `/viz` mode, the context, the environment, Claude Code's theme. */
-type Stage = { mode?: string; context?: () => object; env?: Record<string, string>; theme?: string }
+/**
+ * How `staged` sets the session up: the `/viz` mode, the context, the
+ * environment, Claude Code's theme, and whether the terminal has room for the pane.
+ */
+type Stage = { mode?: string; context?: () => object; env?: Record<string, string>; theme?: string; hasRoom?: boolean }
+
+/** How red the bars are: red over green, on average over the cells drawn. */
+const redness = (cells: string, columns = 80) => {
+  const drawn = colors(cells, columns)
+    .flat()
+    .filter(c => c !== 0)
+  return drawn.reduce((sum, c) => sum + ((c >> 16) & 0xff) - ((c >> 8) & 0xff), 0) / Math.max(1, drawn.length)
+}
+
+/** How many bar glyphs stand in each third of a drawing, below its label row: left, middle, right. */
+const thirds = (cells: string, columns = 80) => {
+  const rows = text(cells, columns).slice(1)
+  const counts = [0, 0, 0]
+  for (const row of rows) {
+    for (let c = 0; c < columns; c++) if (/[▂-█]/.test(row[c] ?? '')) counts[Math.min(2, Math.floor((3 * c) / columns))]! += 1
+  }
+  return counts
+}
 
 /**
  * A session with the band above the prompt while Claude works, in `mode`, and
  * its frames kept: tool calls run until the test finishes them, each check
  * beneath asks, and the context, the environment and the theme are as given.
  */
-const staged = async ($: Engine, on: On, { mode = 'always', context, env = {}, theme }: Stage = {}) => {
+const staged = async ($: Engine, on: On, { mode = 'always', context, env = {}, theme, hasRoom = true }: Stage = {}) => {
   const clock = mock.clock(on)
   mock.store(on)
   mock.env(on, env)
@@ -123,6 +148,16 @@ const staged = async ($: Engine, on: On, { mode = 'always', context, env = {}, t
   on('classic.PostToolUseFailure', () => ({}))
   on('classic.SessionStart', () => ({}))
   on('config.set', ($, e) => ({ value: e.value }))
+  on('prompt.submit', ($, e) => ({ text: e.text }))
+  on('turn.complete', ($, e) => ({ text: e.answer }))
+  on('session.measure', ($, e) => ({ changed: e.changed }))
+  on('ui.open', () => ({ value: hasRoom ? { isPlaced: true as const } : { isPlaced: false as const, reason: 'too narrow' } }))
+  let closes = 0
+  on('ui.close', () => {
+    closes += 1
+
+    return { value: undefined }
+  })
   on('prompt.edit', ($, e) => ({
     text: e.text.slice(0, e.start) + e.inputText + e.text.slice(e.end),
     cursor: e.start + e.inputText.length,
@@ -152,7 +187,18 @@ const staged = async ($: Engine, on: On, { mode = 'always', context, env = {}, t
     cover: (is: boolean) => {
       isCovered = is
     },
+    /** How many times a pane was closed. */
+    closes: () => closes,
   }
+}
+
+/** The pane's drawing, as the terminal mounts it beside the transcript. */
+const pane = {
+  plugin: 'visualizer',
+  surface: 'terminal' as const,
+  component: 'Pane' as const,
+  requestId: 'viz',
+  props: { title: 'Visualizer', isFocused: false, bodyColumns: 80, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 20 }, view: {} },
 }
 
 describe('engine', () => {
@@ -676,13 +722,6 @@ describe('waiting on you', () => {
 describe('errors', () => {
   test('a tool that fails flashes the bars red; a call refused or interrupted never ran, and does not', async ($, on) => {
     const { clock, ui, cells, finish } = await staged($, on)
-    // How red the bars are: red over green, on average over the cells drawn.
-    const redness = () => {
-      const drawn = colors(cells(), 80)
-        .flat()
-        .filter(c => c !== 0)
-      return drawn.reduce((sum, c) => sum + ((c >> 16) & 0xff) - ((c >> 8) & 0xff), 0) / Math.max(1, drawn.length)
-    }
     // A Bash call that ends in an error, the failure raised when it ran: how red the bars are just after.
     const end = async (id: string, failure?: { is_interrupt?: boolean }) => {
       const call = $.tool.call({ tool: 'Bash', command: 'make', tool_use_id: id })
@@ -693,7 +732,7 @@ describe('errors', () => {
       finish(id, { result: 'Exit code 2', isError: true })
       await call
       await clock.advance(100)
-      const red = redness()
+      const red = redness(cells())
       await clock.advance(3000)
       return red
     }
@@ -1005,6 +1044,278 @@ describe('the command', () => {
     const help =
       (await $.command.run({ command: 'viz', args: 'help', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 80 } })).text ?? ''
     for (const verb of hint.slice(1, -1).split('|')) expect(help).toContain(`/viz ${verb}`)
+  })
+})
+
+describe('a model request', () => {
+  const levelOf = (spectrum: Spectrum, id: SourceId) => spectrum.level[SOURCES.findIndex(source => source.id === id)]!
+
+  test('thinks until its first text or tool call, and again when it thinks anew; its end stops it', () => {
+    const spectrum = new Spectrum()
+    const step = new Step(spectrum)
+    expect(spectrum.thinking).toBe(1)
+    step.hear({ kind: 'text', text: 'Hi' })
+    expect(spectrum.thinking).toBe(0)
+    step.hear({ kind: 'thinking', text: 'hmm' })
+    expect(spectrum.thinking).toBe(1)
+    step.hear({ kind: 'tool', name: 'Bash' })
+    expect(spectrum.thinking).toBe(0)
+    step.end()
+    expect(spectrum.thinking).toBe(0)
+
+    // Two at once: one cut off while thinking stops its own thinking alone, once.
+    const first = new Step(spectrum)
+    const second = new Step(spectrum)
+    first.end()
+    first.end()
+    expect(spectrum.thinking).toBe(1)
+    second.end()
+    expect(spectrum.thinking).toBe(0)
+  })
+
+  test("its chunks play their bands: text the bass, a call its tool's band, the arguments hats; a subagent's softer", () => {
+    const played = (chunk: Chunk, isSubagent = false) => {
+      const spectrum = new Spectrum()
+      new Step(spectrum, isSubagent).hear(chunk)
+      spectrum.step()
+      return spectrum
+    }
+    expect(levelOf(played({ kind: 'text', text: 'x'.repeat(18) }), 'text')).toBeGreaterThan(0.5)
+    expect(levelOf(played({ kind: 'tool', name: 'Edit' }), 'edit')).toBeGreaterThan(0.8)
+    expect(levelOf(played({ kind: 'input', json: '{"command":"ls -la /tmp"}' }), 'args')).toBeGreaterThan(0.3)
+    expect(levelOf(played({ kind: 'tool', name: 'Edit' }, true), 'edit')).toBeLessThan(levelOf(played({ kind: 'tool', name: 'Edit' }), 'edit') - 0.1)
+    // Thinking text makes the thinking restless.
+    expect(played({ kind: 'thinking', text: 'x'.repeat(60) }).restless).toBeGreaterThan(0.2)
+  })
+})
+
+describe('the end of a turn', () => {
+  const ended = (reason: string, isSubagent = false) => {
+    const spectrum = new Spectrum()
+    spectrum.ended(reason, isSubagent)
+    spectrum.step()
+    return spectrum
+  }
+
+  test('an answer crashes a cymbal, heavier in the highs, a subagent’s softer', () => {
+    const answered = ended('answer')
+    expect(answered.at(0.9)).toBeGreaterThan(answered.at(0.1) + 0.2)
+    expect(ended('answer', true).at(0.9)).toBeLessThan(answered.at(0.9) - 0.2)
+    expect(answered.flash).toBe(0)
+  })
+
+  test('an interrupt sweeps from the top of the spectrum down; an error or a refusal flashes red', () => {
+    const aborted = ended('aborted')
+    expect(aborted.flash).toBe(0)
+    expect(aborted.at(0.95)).toBeGreaterThan(aborted.at(0.3) + 0.5)
+    for (let i = 0; i < 10; i++) aborted.step()
+    expect(aborted.at(0.5)).toBeGreaterThan(aborted.at(0.95) + 0.5)
+    expect(ended('error').flash).toBeGreaterThan(0.5)
+    expect(ended('refusal').flash).toBeGreaterThan(0.5)
+  })
+})
+
+describe('edits to the prompt', () => {
+  test('play what went in, else, quieter, what went out, else a faint tick where the caret went', () => {
+    const edit = (text: string, start: number, end: number, inputText: string) => {
+      const spectrum = new Spectrum()
+      spectrum.edited(text, start, end, inputText)
+      spectrum.step()
+      return spectrum
+    }
+    const typed = edit('', 0, 0, 'p')
+    const erased = edit('p', 0, 1, '')
+    expect(typed.at(placeOf('p'))).toBeGreaterThan(erased.at(placeOf('p')) + 0.2)
+    expect(erased.at(placeOf('p'))).toBeGreaterThan(0.2)
+    // The caret to the end of the text: a tick at the right, none at the left.
+    const moved = edit('abcd', 4, 4, '')
+    expect(moved.at(0.94)).toBeGreaterThan(0.15)
+    expect(moved.at(0.1)).toBeLessThan(0.05)
+  })
+})
+
+describe('cells', () => {
+  test('the base64 written by hand, for a runtime without its own, is the standard one', () => {
+    for (let n = 0; n <= 6; n++) {
+      const bytes = Uint8Array.from({ length: n }, (_, i) => (i * 97 + 13) & 255)
+      expect(encodeBase64(bytes)).toBe(btoa(String.fromCharCode(...bytes)))
+    }
+    const every = Uint8Array.from({ length: 256 }, (_, i) => i)
+    expect(encodeBase64(every)).toBe(btoa(String.fromCharCode(...every)))
+  })
+})
+
+describe('a turn, through the plugin', () => {
+  const braille = /[⠁-⣿]/
+
+  test('the prompt sweeps up, thinking draws the brainwave until the text comes, and the answer crashes a cymbal', async ($, on) => {
+    let speak = () => {}
+    on('turn.step', async function* ($, e) {
+      yield { kind: 'thinking' as const, index: 0, text: 'Let me see.' }
+      await new Promise<void>(resolve => (speak = resolve))
+      yield { kind: 'text' as const, index: 1, text: 'Here it is.' }
+
+      return { turnId: e.turnId, index: e.index, answer: 'Here it is.', toolUses: [], stopReason: 'end_turn' as const, usage: null }
+    })
+    const { clock, ui, label, cells } = await staged($, on)
+
+    await $.prompt.submit({ text: 'hi', wait: false, origin: { kind: 'composer' } })
+    await clock.advance(150)
+    const [left, , right] = thirds(cells())
+    expect(left).toBeGreaterThan(right!)
+
+    const reading = (async () => {
+      for await (const _ of $.turn.step({ turnId: 'u1', index: 0, model: 'claude-opus-5-5', messageCount: 1 })) {
+      }
+    })()
+    await clock.advance(600)
+    expect(label()).toContain('thinking')
+    expect(text(cells(), 80).join('')).toMatch(braille)
+    speak()
+    await reading
+    await clock.advance(3000)
+    expect(label()).not.toContain('thinking')
+    expect(text(cells(), 80).join('')).not.toMatch(braille)
+
+    await $.turn.complete({ reason: 'answer', answer: 'Here it is.', durationMs: 1000, isAborted: false, turnId: 'u1' })
+    await clock.advance(100)
+    const [low, , high] = thirds(cells())
+    expect(high).toBeGreaterThan(low!)
+    await ui.unmount()
+  })
+
+  test('a stream cut off while thinking stops the thinking', async ($, on) => {
+    on('turn.step', async function* () {
+      yield { kind: 'thinking' as const, index: 0, text: 'Let me' }
+      throw new Error('connection lost')
+    })
+    const { clock, ui, label, cells } = await staged($, on)
+    await (async () => {
+      try {
+        for await (const _ of $.turn.step({ turnId: 'u1', index: 0, model: 'claude-opus-5-5', messageCount: 1 })) {
+        }
+      } catch {}
+    })()
+    await clock.advance(3000)
+    expect(label()).not.toContain('thinking')
+    expect(text(cells(), 80).join('')).not.toMatch(braille)
+    await ui.unmount()
+  })
+
+  test('an interrupted turn sweeps back down; one that errs flashes red', async ($, on) => {
+    const { clock, ui, cells } = await staged($, on)
+    const end = (reason: 'aborted' | 'error') =>
+      $.turn.complete({ reason, answer: '', durationMs: 1000, isAborted: reason === 'aborted', turnId: 'u1' })
+    await clock.advance(200)
+    const calm = redness(cells())
+
+    await end('aborted')
+    await clock.advance(100)
+    const [left, , right] = thirds(cells())
+    expect(right).toBeGreaterThan(left!)
+    expect(redness(cells())).toBeLessThan(calm + 15)
+    await clock.advance(3000)
+
+    // Red even on bars that have fallen: the floor flashes too.
+    await end('error')
+    await clock.advance(100)
+    expect(redness(cells())).toBeGreaterThan(calm + 40)
+    await ui.unmount()
+  })
+})
+
+describe('the pane', () => {
+  test('/viz pane opens it, drawing the bars with a legend; the band steps aside, and is back when the band is asked for', async ($, on) => {
+    const { clock, ui, viz, closes } = await staged($, on)
+    expect(await ui.find({ type: 'Raster', key: 'band' })).toBeDefined()
+
+    expect((await viz('pane')).text).toBe('Visualizer pane open. Close it with ctrl+x x or /viz off.')
+    await clock.advance(100)
+    expect(await ui.find({ type: 'Raster', key: 'band' })).toBeUndefined()
+    const drawn = await $.ui.mount(pane)
+    expect((await drawn.find({ type: 'Raster', key: 'pane' }))?.props).toMatchObject({ columns: 80, rows: 19 })
+    expect((await drawn.find({ type: 'Raster', key: 'legend' }))?.props).toMatchObject({ columns: 80, rows: 1 })
+
+    expect((await viz('bar')).text).toBe('Visualizer: a bar across the whole width.')
+    expect(closes()).toBe(1)
+    await clock.advance(100)
+    expect(await ui.find({ type: 'Raster', key: 'band' })).toBeDefined()
+    await drawn.unmount()
+    await ui.unmount()
+  })
+
+  test('/viz off closes it, and every drawing with it', async ($, on) => {
+    const { clock, ui, viz, closes } = await staged($, on)
+    await viz('pane')
+    expect((await viz('off')).text).toBe('Visualizer off.')
+    expect(closes()).toBe(1)
+    await clock.advance(100)
+    expect(await ui.find({ type: 'Raster', key: 'band' })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test('a pane the terminal has no room for yet says so', async ($, on) => {
+    const { ui, viz } = await staged($, on, { hasRoom: false })
+    expect((await viz('pane')).text).toBe(PANE_WAITS)
+    await ui.unmount()
+  })
+})
+
+describe('the context, through the plugin', () => {
+  test('a measure fills the meter, measured again only when the window changes', async ($, on) => {
+    let usages = 0
+    const context = { tokens: 1, window: 200_000 }
+    const { clock, ui, label } = await staged($, on, {
+      context: () => {
+        usages += 1
+        return context
+      },
+    })
+    expect(usages).toBe(1)
+    await $.session.measure({ context: { tokens: 50_000, window: 200_000 }, rateLimits: [], changed: ['context'] })
+    await clock.advance(200)
+    expect(label()).toContain('context 25%')
+    expect(usages).toBe(1)
+
+    // Another model, another window: measured again, for the meter's top.
+    await $.session.measure({ context: { tokens: 50_000, window: 1_000_000 }, rateLimits: [], changed: ['context'] })
+    await clock.advance(200)
+    expect(label()).toContain('context 5%')
+    expect(usages).toBe(2)
+
+    // Only the cost moved: the meter stays.
+    await $.session.measure({ context: { tokens: 900_000, window: 1_000_000 }, rateLimits: [], changed: ['cost'] })
+    await clock.advance(200)
+    expect(label()).toContain('context 5%')
+    await ui.unmount()
+  })
+
+  test("compacting rewinds, labeled, until done, and the meter drains; a subagent's, or the precompute pass, does not", async ($, on) => {
+    let finish = () => {}
+    // A compaction keeps at least one message: the summary.
+    const messages = [{ role: 'user' as const, text: 'The conversation so far.', toolUses: [] }]
+    on('session.compact', () => new Promise(resolve => (finish = () => resolve({ messages, tokensBefore: 150_000, tokensAfter: 30_000 }))))
+    const { clock, ui, label } = await staged($, on, { context: () => ({ tokens: 150_000, window: 200_000 }) })
+    await clock.advance(200)
+    expect(label()).toContain('context 75%')
+
+    const compacting = $.session.compact({ trigger: 'auto', messages })
+    await clock.advance(300)
+    expect(label()).toContain('compacting')
+    finish()
+    await compacting
+    await clock.advance(1500)
+    expect(label()).not.toContain('compacting')
+    expect(label()).toContain('context 15%')
+
+    for (const quiet of [{ agentId: 'a1' }, { trigger: 'precompute' as const }]) {
+      const pass = $.session.compact({ trigger: 'auto', messages, ...quiet })
+      await clock.advance(300)
+      expect(label()).not.toContain('compacting')
+      finish()
+      await pass
+    }
+    await ui.unmount()
   })
 })
 
