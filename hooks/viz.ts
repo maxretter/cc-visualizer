@@ -83,7 +83,7 @@ export const USAGE = [
   '/viz mini               a small spectrum at the right edge',
   '/viz pos [above|below]  the band above the prompt (default), or below it',
   '/viz pane               a big view with a legend',
-  '/viz demo               play a few bars without a turn',
+  '/viz demo               play a few bars, with two subagents, without a turn',
   '/viz idle [on|off]      the idle show (with always, or in the pane)',
   `/viz theme [name]       ${THEME_NAMES.join(', ')}`,
   "/viz ground [auto|light|dark]  your terminal's background (auto follows Claude Code's theme)",

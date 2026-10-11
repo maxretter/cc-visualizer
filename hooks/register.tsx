@@ -6,8 +6,8 @@ import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register, Timer } from 'claude-code'
 
 import type { VizSize, VizTheme } from '../types'
-import { Bars, DOCTOR_ROWS, FRAME_MS, Spectrum, Step, sourceOf, swatches, trail } from './engine'
-import type { Ask, Call, Layout, Tone } from './engine'
+import { Board, DOCTOR_ROWS, Ensemble, FRAME_MS, Spectrum, Step, sourceOf, swatches, trail } from './engine'
+import type { Ask, Call, Layout, SourceId, Tone } from './engine'
 import {
   DEFAULTS,
   DOCTOR_HINTS,
@@ -59,20 +59,28 @@ const isPaneOpen = atom({ plugin: 'visualizer', key: 'isPaneOpen' } as const, fa
 
 const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, Math.floor(n)))
 
-/** A drawing the frames repaint: its bars, and the raster of tool names beside a mini one. */
+/**
+ * A drawing the frames repaint: its board (the bars, and the subagents'
+ * channels where they fit), the raster of tool names beside a mini one, and
+ * the legend under the pane's, which follows the bars as channels come and go.
+ */
 type Site = {
   requestId: string
   key: string
-  bars: Bars
+  board: Board
   labels: boolean
   names?: { key: string; columns: number; rows: number }
+  legend?: string
   /** While the engine refuses its frames (a dialog took its place): when to try again, on the music's clock. */
   retryAt?: number
   /** The cells last sent, by key: a frame the same as them changes nothing on screen, and is not sent. */
   sent: Map<string, string>
 }
 
-type Mount = { layout?: Layout; labels?: boolean; names?: Site['names'] }
+type Mount = { layout?: Layout; labels?: boolean; names?: Site['names']; legend?: string }
+
+/** A call running, and the spectrum it plays on: the main loop's, or its subagent's own. */
+type Running = { call: Call; owner: Spectrum }
 
 /** The context window now, with its breakdown: the meter, and where its top is. */
 async function measureContext($: EngineInterface): Promise<Measured> {
@@ -94,14 +102,17 @@ async function publish($: EngineInterface, prefs: Prefs) {
 }
 
 export const register: Register = on => {
-  // The animation is the module's own: a reload starts it from silence.
+  // The animation is the module's own: a reload starts it from silence. The
+  // main loop plays on the spectrum, each subagent on its own voice.
   const spectrum = new Spectrum()
+  const ensemble = new Ensemble()
   const sites = new Map<string, Site>()
   // Tool calls by their id while they run, the ones that may yet be put to the
-  // person, and the ones put to the person until answered.
-  const calls = new Map<string, Call>()
+  // person, and the ones put to the person until answered, on each spectrum
+  // the ask plays on.
+  const calls = new Map<string, Running>()
   const checks = new Map<string, Check>()
-  const asks = new Map<string, Ask>()
+  const asks = new Map<string, [Spectrum, Ask][]>()
   // The context window's size, and where auto-compact runs in it (1 when it is off).
   let windowSize: number | undefined
   let limit = 1
@@ -138,12 +149,21 @@ export const register: Register = on => {
   // drawing may not do (it writes state), so a drawing settles it and the frames notice.
   const settle = (id: string): boolean => {
     checks.delete(id)
-    const ask = asks.get(id)
-    if (ask === undefined) return false
+    const asked = asks.get(id)
+    if (asked === undefined) return false
     asks.delete(id)
-    spectrum.answer(ask)
+    for (const [owner, ask] of asked) owner.answer(ask)
     return true
   }
+  // A call put to the person: the vamp on the main spectrum, which the whole
+  // band hears, and a subagent's on its own channel too.
+  const ask = (owner: Spectrum, source: SourceId, call: Call | undefined, grace?: number): [Spectrum, Ask][] =>
+    owner === spectrum
+      ? [[spectrum, spectrum.ask(source, call, grace)]]
+      : [
+          [spectrum, spectrum.ask(source, undefined, grace)],
+          [owner, owner.ask(source, call, grace)],
+        ]
   const answer = (id: string) => {
     if (!settle(id)) return
     // The dialog that asked is gone: try the drawings it covered at once.
@@ -170,14 +190,15 @@ export const register: Register = on => {
   // as it was, so the frames go on trying until one lands.
   const mount = (requestId: string, key: string, columns: number, rows: number, extra: Mount = {}): Site => {
     const had = sites.get(requestId)
-    const isSame = had?.key === key && had.bars.columns === columns && had.bars.rows === rows
-    const bars = isSame ? had.bars : new Bars(columns, rows, extra.layout)
+    const isSame = had?.key === key && had.board.columns === columns && had.board.rows === rows
+    const board = isSame ? had.board : new Board(columns, rows, extra.layout)
     const site = {
       requestId,
       key,
-      bars,
+      board,
       labels: extra.labels ?? false,
       names: extra.names,
+      legend: extra.legend,
       retryAt: had?.retryAt,
       sent: new Map<string, string>(),
     }
@@ -233,20 +254,23 @@ export const register: Register = on => {
       )
     }
     const frame = (elapsed: number) => {
-      spectrum.ambient = isAmbient(prefs, drawn())
+      // No idle show while a subagent works, though the main loop rests.
+      spectrum.ambient = isAmbient(prefs, drawn()) && ensemble.isCalm()
       spectrum.step(elapsed)
-      for (const site of sites.values()) site.bars.step(spectrum)
+      ensemble.step(elapsed)
+      for (const site of sites.values()) site.board.step(spectrum, ensemble)
       for (const site of sites.values()) {
         if (site.retryAt !== undefined && spectrum.now < site.retryAt) continue
-        blit(site, site.key, site.bars.paint(prefs.theme, spectrum, site.labels, tone))
-        if (site.names) blit(site, site.names.key, trail(spectrum, prefs.theme, site.names.columns, site.names.rows, tone))
+        blit(site, site.key, site.board.paint(prefs.theme, spectrum, ensemble, site.labels, tone))
+        if (site.names) blit(site, site.names.key, trail(spectrum, prefs.theme, site.names.columns, site.names.rows, tone, ensemble))
+        if (site.legend) blit(site, site.legend, site.board.legend(prefs.theme, tone))
       }
       const pacing = pace({
-        isCalm: spectrum.isCalm(),
+        isCalm: spectrum.isCalm() && ensemble.isCalm(),
         isAmbient: spectrum.ambient,
         isResting: spectrum.isResting(),
         isQuiet: spectrum.isQuiet(),
-        isSettled: [...sites.values()].every(site => site.bars.isSettled()),
+        isSettled: [...sites.values()].every(site => site.board.isSettled()),
         isGlinting: spectrum.glint() !== undefined && spectrum.gauge > 0,
         isHeld: [...sites.values()].some(site => site.retryAt !== undefined),
       })
@@ -283,6 +307,13 @@ export const register: Register = on => {
     await update($, isPlaying, () => ticker !== undefined && tempo === FRAME_MS)
     // The meter as it stood, after a reload or on a resumed session.
     void measureContext($).then(remeasured, () => {})
+    // The subagents at work through a reload, each back in a channel of its own.
+    for (const agent of await $.agent.list().catch(() => [])) {
+      const info = { name: agent.name, description: agent.description, type: agent.type }
+      if (agent.status === 'pending' || agent.status === 'running' || agent.status === 'waiting') ensemble.join(agent.id, info)
+      else ensemble.know(agent.id, info)
+    }
+    if (!ensemble.isCalm()) wake()
 
     return next(e)
   })
@@ -305,9 +336,11 @@ export const register: Register = on => {
     return next(e)
   }).catch(($, e, next) => next(e))
 
-  // The model's response as it streams, played a chunk at a time.
+  // The model's response as it streams, played a chunk at a time: a
+  // subagent's on its own voice, one never heard of softer on the main spectrum.
   on('turn.step', async function* ($, e, next) {
-    const step = new Step(spectrum, e.agentId !== undefined)
+    const voice = ensemble.voiceOf(e.agentId)
+    const step = voice !== undefined ? new Step(voice.spectrum) : new Step(spectrum, e.agentId !== undefined)
     wake()
     try {
       for await (const chunk of next(e)) {
@@ -321,13 +354,14 @@ export const register: Register = on => {
     }
   })
 
-  // A tool runs: a hit, its name, a held note until it returns.
+  // A tool runs: a hit, its name, a held note until it returns; a subagent's in its own channel.
   on('tool.call', async ($, e, next) => {
-    const call = spectrum.startCall(String(e.tool))
+    const owner = ensemble.voiceOf(e.agentId)?.spectrum ?? spectrum
+    const call = owner.startCall(String(e.tool))
     const id = e.tool_use_id
     if (id !== undefined) {
-      calls.set(id, call)
-      if (PERSON.has(String(e.tool))) asks.set(id, spectrum.ask(call.source, call, 0))
+      calls.set(id, { call, owner })
+      if (PERSON.has(String(e.tool))) asks.set(id, ask(owner, call.source, call, 0))
       else checks.set(id, { tool: e.tool, agentId: e.agentId, input: inputKey(argumentsOf(e)) })
     }
     wake()
@@ -338,7 +372,7 @@ export const register: Register = on => {
         calls.delete(id)
         answer(id)
       }
-      spectrum.endCall(call)
+      owner.endCall(call)
     }
   }).catch(($, e, next) => next(e))
 
@@ -347,7 +381,8 @@ export const register: Register = on => {
   // error too, but this is not raised for it.
   on('classic.PostToolUseFailure', ($, e, next) => {
     if (e.is_interrupt !== true) {
-      spectrum.error()
+      const owner = ensemble.find(e.agent_id)?.spectrum ?? spectrum
+      owner.error()
       wake()
     }
 
@@ -362,8 +397,8 @@ export const register: Register = on => {
     const id = requestFor(checks, e.tool_name, e.agent_id, e.tool_input)
     if (id !== undefined) {
       checks.delete(id)
-      const call = calls.get(id)
-      asks.set(id, spectrum.ask(call?.source ?? sourceOf(e.tool_name), call))
+      const running = calls.get(id)
+      asks.set(id, ask(running?.owner ?? spectrum, running?.call.source ?? sourceOf(e.tool_name), running?.call))
       wake()
     }
 
@@ -448,13 +483,26 @@ export const register: Register = on => {
     }
   })
 
-  // The turn ends: a cymbal, a sweep down when interrupted, red on an error.
+  // The turn ends: a cymbal, a sweep down when interrupted, red on an error. A
+  // subagent's ends in its own channel, which says how it went and fades.
   on('turn.complete', ($, e, next) => {
-    spectrum.ended(e.reason, e.agentId !== undefined)
+    if (e.agentId === undefined || !ensemble.end(e.agentId, e.reason)) spectrum.ended(e.reason, e.agentId !== undefined)
     wake()
 
     return next(e)
   })
+
+  // A subagent starts: a channel of its own beside the main spectrum. It
+  // watches, and passes the spawn on unchanged.
+  on('agent.spawn', async ($, e, next) => {
+    const spawned = await next(e)
+    if (spawned.agentId !== undefined) {
+      ensemble.join(spawned.agentId, { name: e.name, description: e.description, type: e.subagentType })
+      wake()
+    }
+
+    return spawned
+  }).catch(($, e, next) => next(e))
 
   // The band as either site draws it: across `bodyColumns`, or mini at its right edge.
   const band = (ui: Pick<Elements['terminal'], 'Box' | 'Raster'>, requestId: string, s: VizSize, t: VizTheme, bodyColumns: number, room: number) => {
@@ -468,8 +516,8 @@ export const register: Register = on => {
 
       return (
         <Box width={bodyColumns} justifyContent="flex-end">
-          {names && <Raster key="names" columns={names.columns} rows={rows} cells={trail(spectrum, t, names.columns, rows, tone)} />}
-          <Raster key="mini" columns={columns} rows={rows} cells={site.bars.paint(t, spectrum, false, tone)} />
+          {names && <Raster key="names" columns={names.columns} rows={rows} cells={trail(spectrum, t, names.columns, rows, tone, ensemble)} />}
+          <Raster key="mini" columns={columns} rows={rows} cells={site.board.paint(t, spectrum, ensemble, false, tone)} />
         </Box>
       )
     }
@@ -478,7 +526,7 @@ export const register: Register = on => {
     const rows = Math.min(BAND_ROWS, room)
     const site = mount(requestId, 'band', columns, rows, { layout: wide(columns), labels: true })
 
-    return <Raster key="band" columns={columns} rows={rows} cells={site.bars.paint(t, spectrum, true, tone)} />
+    return <Raster key="band" columns={columns} rows={rows} cells={site.board.paint(t, spectrum, ensemble, true, tone)} />
   }
 
   // Above the prompt: the band in the slot over the input.
@@ -551,12 +599,12 @@ export const register: Register = on => {
     const { Box, Raster } = $.ui.resolve(e)
     const columns = clamp(e.props.bodyColumns, 1, 512)
     const rows = clamp(e.props.scroll.bodyRows - 1, 2, PANE_ROWS)
-    const site = mount(PANE, 'pane', columns, rows, { layout: wide(columns), labels: true })
+    const site = mount(PANE, 'pane', columns, rows, { layout: wide(columns), labels: true, legend: 'legend' })
 
     return (
       <Box flexDirection="column">
-        <Raster key="pane" columns={columns} rows={rows} cells={site.bars.paint(t, spectrum, true, tone)} />
-        <Raster key="legend" columns={columns} rows={1} cells={site.bars.legend(t, tone)} />
+        <Raster key="pane" columns={columns} rows={rows} cells={site.board.paint(t, spectrum, ensemble, true, tone)} />
+        <Raster key="legend" columns={columns} rows={1} cells={site.board.legend(t, tone)} />
       </Box>
     )
   })
@@ -621,7 +669,7 @@ export const register: Register = on => {
         await update($, isPaneOpen, () => false)
       }
     }
-    if (outcome.isDemo) spectrum.playDemo()
+    if (outcome.isDemo) spectrum.playDemo(ensemble)
     const before = prefs
     prefs = outcome.prefs
     retone()
