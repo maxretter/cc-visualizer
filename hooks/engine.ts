@@ -207,6 +207,17 @@ const DEMO_AGENTS: readonly DemoAgent[] = [
 ]
 /** How long a demo subagent's answer streams before it ends. */
 const DEMO_ANSWER = 500
+/**
+ * When the demo opens its subagents' transcripts, on the drums' clock, as the
+ * person would from the tasks list: each in turn, once both channels are open,
+ * its channel growing into the band; then the main conversation's again,
+ * before either is done.
+ */
+const DEMO_VIEWS: readonly (readonly [at: number, agent: string | undefined])[] = [
+  [2_100, 'scout'],
+  [3_200, 'tests'],
+  [4_700, undefined],
+]
 
 /** A demo subagent as it plays: its voice once it has joined, its next call, the calls still running, and whether it thinks or is done. */
 type DemoPart = { agent: DemoAgent; voice?: Voice; next: number; running: { call: Call; endAt: number }[]; isThinking: boolean; isDone: boolean }
@@ -278,6 +289,13 @@ export class Spectrum {
   /** The demo's subagents: the ensemble they join, and how far along each is. */
   private demoEnsemble: Ensemble | undefined
   private demoParts: DemoPart[] = []
+  /**
+   * The demo subagent whose transcript the demo has opened, by its voice's id,
+   * which the drawings put in focus as they do the one the person opens; none
+   * for the main conversation's. And the next of its views.
+   */
+  demoView: string | undefined
+  private demoViews = 0
   /** The latest tool calls, oldest first, while their names show. */
   readonly calls: Call[] = []
   /** Tool calls put to the person, until they are answered. */
@@ -502,6 +520,8 @@ export class Spectrum {
     this.demoNext = 0
     this.demoEnsemble = ensemble
     this.demoParts = ensemble === undefined ? [] : DEMO_AGENTS.map(agent => ({ agent, next: 0, running: [], isThinking: false, isDone: false }))
+    this.demoView = undefined
+    this.demoViews = 0
     this.kick()
   }
 
@@ -757,8 +777,14 @@ export class Spectrum {
       }
     }
     for (const part of this.demoParts) this.playPart(part, drums, frames)
+    // Each view the step reached: a subagent's transcript opened, or the main conversation's again.
+    for (; this.demoViews < DEMO_VIEWS.length && DEMO_VIEWS[this.demoViews]![0] <= drums; this.demoViews++) {
+      const name = DEMO_VIEWS[this.demoViews]![1]
+      this.demoView = this.demoParts.find(part => part.agent.name === name)?.voice?.id
+    }
     if (this.demo === 0) {
       this.finishParts()
+      this.demoView = undefined
       this.cymbal()
     }
   }
@@ -1134,14 +1160,21 @@ const callName = (spectrum: Spectrum, call: Call): Named => ({
  * The latest tools' names along the bottom row, newest at the right edge
  * (beside a mini spectrum), a spinner before each one still running; the
  * subagents of the `ensemble` next to the main loop's thinking, each in its color.
+ *
+ * With a subagent in `focus`, which the mini spectrum plays, the voices alone:
+ * it first, at the right edge, then the main loop's, then the others.
  */
-export function trail(spectrum: Spectrum, theme: VizTheme, columns: number, rows: number, tone: Tone = 'dark', ensemble?: Ensemble): string {
+export function trail(spectrum: Spectrum, theme: VizTheme, columns: number, rows: number, tone: Tone = 'dark', ensemble?: Ensemble, focus?: Voice): string {
   const words = blank(columns * rows)
   const row = rows - 1
   const dot = mix(GROUND[tone], legible(LEGEND_GRAY, tone), 0.6)
-  const voices = (ensemble?.voices ?? []).map(voiceName)
+  const others = (ensemble?.voices ?? []).filter(voice => voice !== focus)
   const calls = spectrum.calls.map(call => callName(spectrum, call)).reverse()
-  const names = [statusName(spectrum), thinkingName(spectrum), ...voices, ...calls].filter((name): name is Named => name !== undefined)
+  const names = (
+    focus === undefined
+      ? [statusName(spectrum), thinkingName(spectrum), ...others.map(voiceName), ...calls]
+      : [focus, mainVoice(spectrum), ...others].map(voiceName)
+  ).filter((name): name is Named => name !== undefined)
   let end = columns - 2
   let placed = 0
   for (const name of names) {
@@ -1225,6 +1258,13 @@ function random(seed: number): () => number {
  */
 export type Layout = { width: number; gap: number; meter?: boolean }
 
+/**
+ * What bars show beside the music of the spectrum they draw: the context
+ * meter of another (the main loop's, while a subagent plays on them), and
+ * names leading their labels at the left.
+ */
+type Look = { meter?: Spectrum; lead?: readonly Named[] }
+
 /** How fast a bar rises toward its level: half the way every 19 ms, nearly at once. */
 const RISE = 19
 /**
@@ -1289,12 +1329,12 @@ export class Bars {
   }
 
   /**
-   * These bars `columns` wide, laid out as they are, and standing as they
-   * stand: each bar takes the height, peak and shimmer of the bar nearest its
-   * place on the spectrum, so a drawing that narrows or widens moves on smoothly.
+   * These bars `columns` wide, laid out as they are or as `layout` says, and
+   * standing as they stand: each bar takes the height, peak and shimmer of the
+   * bar nearest its place on the spectrum, so a drawing that narrows or widens moves on smoothly.
    */
-  resize(columns: number): Bars {
-    const bars = new Bars(columns, this.rows, this.layout)
+  resize(columns: number, layout: Layout = this.layout): Bars {
+    const bars = new Bars(columns, this.rows, layout)
     for (let b = 0; b < bars.count; b++) {
       const from = Math.min(this.count - 1, Math.floor(((b + 0.5) / bars.count) * this.count))
       bars.height[b] = this.height[from]!
@@ -1378,8 +1418,11 @@ export class Bars {
     return base64(new Uint8Array(this.draw(theme, spectrum, labels, tone).buffer))
   }
 
-  /** The cells `paint` packs, three words each: glyph, foreground, background. */
-  draw(theme: VizTheme, spectrum?: Spectrum, labels = false, tone: Tone = 'dark'): Uint32Array {
+  /**
+   * The cells `paint` packs, three words each: glyph, foreground, background.
+   * With a `look`, the meter shows another spectrum's context, and names lead the labels.
+   */
+  draw(theme: VizTheme, spectrum?: Spectrum, labels = false, tone: Tone = 'dark', look: Look = {}): Uint32Array {
     const { columns, rows } = this
     const words = blank(columns * rows)
     const colors = this.colorsOf(theme, tone)
@@ -1417,9 +1460,9 @@ export class Bars {
         }
       }
     }
-    if (this.meter && spectrum !== undefined) this.paintMeter(words, spectrum, tone)
+    if (this.meter && spectrum !== undefined) this.paintMeter(words, look.meter ?? spectrum, tone)
     if (spectrum !== undefined && spectrum.mind > 0) this.brainwave(words, theme, spectrum, tone)
-    if (labels && spectrum !== undefined) this.label(words, theme, spectrum, tone)
+    if (labels && spectrum !== undefined) this.label(words, theme, spectrum, tone, look)
     return words
   }
 
@@ -1509,22 +1552,30 @@ export class Bars {
   }
 
   /**
-   * The top row: what is going on at the left (a wait, a compaction, the idle),
-   * the context's fill at the right by the meter, and the newest call of each
-   * tool band, its name over the band, between.
+   * The top row: the look's names and what is going on at the left (a wait, a
+   * compaction, the idle), the context's fill at the right by the meter, and
+   * the newest call of each tool band, its name over the band, between.
    */
-  private label(words: Uint32Array, theme: VizTheme, spectrum: Spectrum, tone: Tone) {
+  private label(words: Uint32Array, theme: VizTheme, spectrum: Spectrum, tone: Tone, look: Look) {
     let free = 0
     let end = this.span
-    const context = this.meter ? contextName(spectrum) : undefined
+    const context = this.meter ? contextName(look.meter ?? spectrum) : undefined
     if (context !== undefined && context.text.length < this.span) {
       write(words, this.columns, 0, end - context.text.length, context.text, nameColorOf(theme, context, context.strength, tone))
       end -= context.text.length + 1
     }
+    let at = this.offset
+    for (const lead of look.lead ?? []) {
+      const text = fit(lead.text, Math.max(8, Math.floor((end - this.offset) / 3)))
+      if (at + text.length > end) break
+      write(words, this.columns, 0, at, text, nameColorOf(theme, lead, lead.strength, tone))
+      at += text.length + 1
+      free = at
+    }
     const status = statusName(spectrum)
-    if (status !== undefined && this.offset + status.text.length <= end) {
-      write(words, this.columns, 0, this.offset, status.text, nameColorOf(theme, status, status.strength, tone))
-      free = this.offset + status.text.length + 1
+    if (status !== undefined && at + status.text.length <= end) {
+      write(words, this.columns, 0, at, status.text, nameColorOf(theme, status, status.strength, tone))
+      free = at + status.text.length + 1
     }
     for (const source of SOURCES) {
       let name = source.id === 'think' ? thinkingName(spectrum) : undefined
@@ -1583,6 +1634,11 @@ export type Voice = {
 const VOICE_COLORS = [0x60a5fa, 0xfb923c, 0xa3e635, 0xe879f9, 0x22d3ee, 0xfb7185, 0x818cf8, 0x34d399]
 /** How long a finished subagent's channel stays, saying how it went, before it closes. */
 const VOICE_LINGER = 3_000
+/** The main loop's color, where it is named as a voice: over its bars narrowed for a subagent in focus, and in the trail. */
+const MAIN_COLOR = 0xe5e7eb
+
+/** The main loop as a voice, named `main`, labeled as a channel is while a subagent is in focus. */
+const mainVoice = (spectrum: Spectrum): Voice => ({ id: '', name: 'main', color: MAIN_COLOR, spectrum })
 
 /** A subagent's name as drawn: the one it was given, else its task, else its type; printable, on one line. */
 export const voiceNameOf = (info: VoiceInfo): string =>
@@ -1674,6 +1730,8 @@ const CHANNEL_LAYOUT: Layout = { width: 1, gap: 1 }
 
 /** How long a channel takes to open, fading in as it does, or to close once its voice has left. */
 const OPEN = 400
+/** How long a channel takes to grow into the room the main bars give up as its subagent comes into focus, or to shrink back. */
+const GROW = 500
 
 /** How many channels fit beside a main spectrum in `columns`: it keeps half of them, and at least 32. */
 export const channelsFit = (columns: number): number => Math.max(0, Math.floor((columns - Math.max(32, Math.ceil(columns / 2))) / CHANNEL))
@@ -1690,15 +1748,27 @@ function doing(voice: Voice): Named | undefined {
   if (spectrum.waitedFor() !== undefined) {
     return { text: 'waiting', source: 'think', strength: 0.65 + 0.35 * spectrum.tick(), isRunning: false, color: CUE }
   }
-  if (voice.outcome !== undefined) {
-    return { text: voice.outcome, source: 'think', strength: 0.85, isRunning: false, color: voice.outcome === 'failed' ? ERROR : LEGEND_GRAY }
-  }
+  const ended = outcomeName(voice)
+  if (ended !== undefined) return ended
   for (let i = spectrum.calls.length - 1; i >= 0; i--) {
     const call = spectrum.calls[i]!
     if (spectrum.isRunning(call)) return callName(spectrum, call)
   }
   const last = spectrum.calls.at(-1)
   return thinkingName(spectrum) ?? (last === undefined ? undefined : callName(spectrum, last))
+}
+
+/** How a subagent's loop ended, as its label says it: red when it failed; none while it works. */
+const outcomeName = (voice: Voice): Named | undefined =>
+  voice.outcome === undefined
+    ? undefined
+    : { text: voice.outcome, source: 'think', strength: 0.85, isRunning: false, color: voice.outcome === 'failed' ? ERROR : LEGEND_GRAY }
+
+/** A subagent on wide bars, as the names leading their labels say it: its name in its color, and how it ended once it has. */
+const focusLead = (voice: Voice): Named[] => {
+  const ended = outcomeName(voice)
+  const name: Named = { text: voice.name, source: 'agent', strength: 1, isRunning: false, color: voice.color }
+  return ended === undefined ? [name] : [name, ended]
 }
 
 /** `text` cut to `width`, at the end of a word where one fits: a task's first words, not a word cut off. */
@@ -1720,8 +1790,18 @@ const voiceName = (voice: Voice): Named => {
   }
 }
 
-/** A subagent's channel: its voice, its bars, how far open it is, and how far faded in. One whose voice has left closes. */
-type Seat = { voice: Voice; bars: Bars; open: number; shown: number; isLeaving: boolean }
+/**
+ * A subagent's channel: its voice, its bars, how far open it is, how far
+ * faded in, and how far grown into the room the main bars give up while it is
+ * in focus. One whose voice has left closes.
+ */
+type Seat = { voice: Voice; bars: Bars; open: number; shown: number; grow: number; isLeaving: boolean }
+
+/** Bars this wide or wider are two cells a bar, and name each tool over its band; narrower, a channel's label names who plays. */
+const WIDE = 30
+
+/** A channel's bars laid out for `columns`: two cells a bar once it has grown wide. */
+const channelLayout = (columns: number): Layout => (columns >= WIDE ? { width: 2, gap: 1 } : CHANNEL_LAYOUT)
 
 /**
  * The subagents' channels, side by side, up to `capacity` of them and `rows`
@@ -1731,6 +1811,10 @@ type Seat = { voice: Voice; bars: Bars; open: number; shown: number; isLeaving: 
  * waiting for a channel opens at the end as the first to finish closes, so
  * the room they take holds; how many still wait shows at the right edge.
  * Those on stage when the channels are made (a reload, a resize) are open at once.
+ *
+ * The channel of the subagent in focus grows into the room the main bars give
+ * up, its bars widening as they stand, its name leading the labels once it is
+ * wide; it shrinks back the same way once the subagent is out of focus.
  */
 export class Channels {
   private readonly seats: Seat[] = []
@@ -1741,116 +1825,185 @@ export class Channels {
     readonly rows: number,
   ) {}
 
-  /** The columns the channels take now, as they open and close. */
+  /** The columns a channel takes now: as much of it as is open, and all it has grown by. */
+  private widthOf(seat: Seat): number {
+    return Math.round(CHANNEL * smooth(seat.open)) + seat.bars.columns + CHANNEL_GAP - CHANNEL
+  }
+
+  /** The columns the channels take now, as they open and close, and grow and shrink. */
   get width(): number {
-    return this.seats.reduce((sum, seat) => sum + Math.round(CHANNEL * smooth(seat.open)), 0)
+    return this.seats.reduce((sum, seat) => sum + this.widthOf(seat), 0)
+  }
+
+  /** Whether `voice` has a channel here that is staying. */
+  has(voice: Voice): boolean {
+    return this.seats.some(seat => seat.voice === voice && !seat.isLeaving)
   }
 
   /** Voices gone leave their channels; those waiting open new ones at the end, while the channels staying leave room. */
-  private seat(ensemble: Ensemble) {
+  private seat(ensemble: Ensemble, focus?: Voice) {
     for (const seat of this.seats) if (!ensemble.voices.includes(seat.voice)) seat.isLeaving = true
     let staying = this.seats.filter(seat => !seat.isLeaving).length
     for (const voice of ensemble.voices) {
       if (this.seats.some(seat => seat.voice === voice)) continue
       if (staying >= this.capacity) break
       const open = this.isFresh ? 1 : 0
-      this.seats.push({ voice, bars: new Bars(CHANNEL - CHANNEL_GAP, this.rows, CHANNEL_LAYOUT), open, shown: open, isLeaving: false })
+      // Made with the subagent in focus on stage, its channel has grown already.
+      const grow = this.isFresh && voice === focus ? 1 : 0
+      this.seats.push({ voice, bars: new Bars(CHANNEL - CHANNEL_GAP, this.rows, CHANNEL_LAYOUT), open, shown: open, grow, isLeaving: false })
       staying += 1
     }
     this.isFresh = false
   }
 
-  /** Moves the channels on by `ms`: open and close them, and their bars toward their voices' spectra. */
-  step(ensemble: Ensemble, ms: number) {
-    this.seat(ensemble)
+  /**
+   * Moves the channels on by `ms`: open and close them, grow the one of the
+   * subagent in `focus` toward `room` (the columns the channels may take in
+   * all) and shrink any other back, and move their bars toward their voices' spectra.
+   */
+  step(ensemble: Ensemble, ms: number, room: number, focus?: Voice) {
+    this.seat(ensemble, focus)
     const by = ms / OPEN
+    const grows = ms / GROW
     for (const seat of this.seats) {
       seat.open = seat.isLeaving ? Math.max(0, seat.open - by) : Math.min(1, seat.open + by)
       seat.shown = Math.min(1, seat.shown + by)
-      seat.bars.step(seat.voice.spectrum)
+      seat.grow = seat.voice === focus && !seat.isLeaving ? Math.min(1, seat.grow + grows) : Math.max(0, seat.grow - grows)
     }
     for (let i = this.seats.length - 1; i >= 0; i--) {
-      if (this.seats[i]!.isLeaving && this.seats[i]!.open === 0) this.seats.splice(i, 1)
+      const seat = this.seats[i]!
+      if (seat.isLeaving && seat.open === 0 && seat.grow === 0) this.seats.splice(i, 1)
+    }
+    // What the channels leave of the room, ungrown: the one in focus grows into it.
+    const give = Math.max(0, room - this.seats.reduce((sum, seat) => sum + Math.round(CHANNEL * smooth(seat.open)), 0))
+    for (const seat of this.seats) {
+      const columns = CHANNEL - CHANNEL_GAP + Math.round(give * smooth(seat.grow))
+      if (columns !== seat.bars.columns) seat.bars = seat.bars.resize(columns, channelLayout(columns))
+      seat.bars.step(seat.voice.spectrum)
     }
   }
 
-  /** Every channel open, its bars on the floor; or none. */
+  /** Every channel open, grown or not, its bars on the floor; or none. */
   isSettled(): boolean {
-    return this.seats.every(seat => !seat.isLeaving && seat.open === 1 && seat.shown === 1 && seat.bars.isSettled())
+    return this.seats.every(
+      seat => !seat.isLeaving && seat.open === 1 && seat.shown === 1 && (seat.grow === 0 || seat.grow === 1) && seat.bars.isSettled(),
+    )
   }
 
   /**
    * Draws the channels into `words`, a drawing `columns` wide, from column
    * `left`: each as much of it as is open, faded in as it opens; one closing
-   * still shows how its agent's work went as it shrinks.
+   * still shows how its agent's work went as it shrinks. One grown wide is
+   * labeled as the main bars are, its name leading.
    */
   draw(words: Uint32Array, columns: number, left: number, theme: VizTheme, ensemble: Ensemble, tone: Tone) {
     const { rows } = this
     const waiting = ensemble.voices.filter(voice => !this.seats.some(seat => seat.voice === voice)).length
     const more = waiting > 0 ? `+${waiting}` : ''
-    const width = CHANNEL - CHANNEL_GAP
     let at = left
     this.seats.forEach((seat, i) => {
-      const shows = Math.min(Math.round(CHANNEL * smooth(seat.open)), columns - at)
+      const shows = Math.min(this.widthOf(seat), columns - at)
       const alpha = seat.shown
       if (alpha > 0 && shows > 0) {
         // The whole channel, then as much of it as is open.
-        const channel = blank(CHANNEL * rows)
-        const cells = seat.bars.draw(theme, seat.voice.spectrum, false, tone)
+        const width = seat.bars.columns
+        const full = width + CHANNEL_GAP
+        const isWide = width >= WIDE
+        const channel = blank(full * rows)
+        const cells = seat.bars.draw(theme, seat.voice.spectrum, isWide, tone, isWide ? { lead: focusLead(seat.voice) } : {})
         for (let r = 0; r < rows; r++) {
           for (let c = 0; c < width; c++) {
             const from = (r * width + c) * 3
-            const to = (r * CHANNEL + CHANNEL_GAP + c) * 3
+            const to = (r * full + CHANNEL_GAP + c) * 3
             channel[to] = cells[from]!
             channel[to + 1] = alpha < 1 && cells[from] !== SPACE ? mix(GROUND[tone], cells[from + 1]!, alpha) : cells[from + 1]!
           }
         }
-        const room = i === this.seats.length - 1 && more !== '' ? width - more.length - 1 : width
-        voiceLabel(channel, CHANNEL, CHANNEL_GAP, room, seat.voice, alpha, theme, tone)
-        for (let r = 0; r < rows; r++) words.set(channel.subarray(r * CHANNEL * 3, (r * CHANNEL + shows) * 3), (r * columns + at) * 3)
+        if (!isWide) {
+          const room = i === this.seats.length - 1 && more !== '' ? width - more.length - 1 : width
+          voiceLabel(channel, full, CHANNEL_GAP, room, seat.voice, alpha, theme, tone)
+        }
+        for (let r = 0; r < rows; r++) words.set(channel.subarray(r * full * 3, (r * full + shows) * 3), (r * columns + at) * 3)
       }
       at += shows
     })
     if (more !== '') write(words, columns, 0, columns - more.length, more, mix(GROUND[tone], legible(LEGEND_GRAY, tone), 0.85))
   }
+
+  /** Under each channel grown wide, its bars' legend, into a row `columns` wide whose channels start at column `left`. */
+  legend(words: Uint32Array, columns: number, left: number, theme: VizTheme, tone: Tone) {
+    let at = left
+    for (const seat of this.seats) {
+      const shows = Math.min(this.widthOf(seat), columns - at)
+      if (seat.bars.columns >= WIDE && shows > CHANNEL_GAP) {
+        words.set(seat.bars.legendCells(theme, tone).subarray(0, (shows - CHANNEL_GAP) * 3), (at + CHANNEL_GAP) * 3)
+      }
+      at += shows
+    }
+  }
 }
+
+/** The fewest columns the main bars narrow to while a subagent in focus grows into their room: a channel's. */
+const MAIN_LEAST = CHANNEL
 
 /**
  * A drawing's bars: the main spectrum's and, at their right, the subagents'
  * channels, as many as fit. The main bars narrow as a channel opens and widen
  * as one closes, standing as they stood, so the room moves smoothly.
+ *
+ * As a subagent comes into `focus` (its transcript is the one in view), its
+ * channel grows to take the main bars' room while they narrow to a channel's
+ * width, labeled `main`, the two together; out of focus, each goes back. The
+ * context meter stays at the main bars' right edge. A subagent in focus with
+ * no channel here to grow (beside a mini strip, on a band too narrow for
+ * channels, or waiting for one) plays on the main bars instead, its name leading their labels.
  */
 export class Board {
   /** The main spectrum's bars, as wide as the channels leave them. */
   bars: Bars
   readonly channels: Channels
+  private readonly layout: Layout
 
   constructor(
     readonly columns: number,
     readonly rows: number,
     layout?: Layout,
   ) {
-    this.bars = new Bars(columns, rows, layout)
+    this.layout = layout ?? { width: columns >= WIDE ? 2 : 1, gap: 1 }
+    this.bars = new Bars(columns, rows, this.layout)
     this.channels = new Channels(channelsFit(columns), rows)
   }
 
-  /** Moves the bars toward the spectrum and each channel's toward its voice, the main bars making room for the channels as they are now. */
-  step(spectrum: Spectrum, ensemble: Ensemble) {
-    this.channels.step(ensemble, spectrum.dt)
-    const main = this.columns - this.channels.width
-    if (main !== this.bars.columns) this.bars = this.bars.resize(main)
-    this.bars.step(spectrum)
+  /** The subagent in focus when it has no channel here to grow into: it plays on the main bars. */
+  private stray(focus?: Voice): Voice | undefined {
+    return focus !== undefined && !this.channels.has(focus) ? focus : undefined
   }
 
-  /** The bars and channels all at rest: nothing moving, nothing opening or closing. */
+  /**
+   * Moves the bars toward the spectrum and each channel's toward its voice, the
+   * main bars making room for the channels as they are now, the one in focus grown.
+   */
+  step(spectrum: Spectrum, ensemble: Ensemble, focus?: Voice) {
+    this.channels.step(ensemble, spectrum.dt, this.columns - MAIN_LEAST, focus)
+    const main = Math.max(Math.min(this.columns, MAIN_LEAST), this.columns - this.channels.width)
+    if (main !== this.bars.columns) this.bars = this.bars.resize(main, { ...this.layout, width: main >= WIDE ? this.layout.width : 1 })
+    this.bars.step(this.stray(focus)?.spectrum ?? spectrum)
+  }
+
+  /** The bars and channels all at rest: nothing moving, nothing opening, closing, growing or shrinking. */
   isSettled(): boolean {
     return this.bars.isSettled() && this.channels.isSettled()
   }
 
   /** The whole drawing as Raster cells: the main bars, then the channels. */
-  paint(theme: VizTheme, spectrum: Spectrum, ensemble: Ensemble, labels = false, tone: Tone = 'dark'): string {
+  paint(theme: VizTheme, spectrum: Spectrum, ensemble: Ensemble, labels = false, tone: Tone = 'dark', focus?: Voice): string {
     const { columns, rows } = this
-    const main = this.bars.draw(theme, spectrum, labels, tone)
+    const stray = this.stray(focus)
+    const look = stray === undefined ? {} : { meter: spectrum, lead: focusLead(stray) }
+    // Narrowed for a subagent in focus, the main bars are labeled as a channel is: `main`, and what it is doing.
+    const isNarrowed = this.bars.columns < WIDE && this.bars.columns < columns
+    const main = this.bars.draw(theme, stray?.spectrum ?? spectrum, labels && !isNarrowed, tone, look)
+    if (labels && isNarrowed) voiceLabel(main, this.bars.columns, 0, this.bars.span, mainVoice(spectrum), 1, theme, tone)
     if (this.bars.columns === columns) return base64(new Uint8Array(main.buffer))
     const words = blank(columns * rows)
     const width = this.bars.columns
@@ -1859,10 +2012,11 @@ export class Board {
     return base64(new Uint8Array(words.buffer))
   }
 
-  /** The legend under the main bars, as wide as they are now; nothing under the channels. */
+  /** The legend under the main bars and under a channel grown wide, as wide as they are now; nothing under the other channels. */
   legend(theme: VizTheme, tone: Tone = 'dark'): string {
     const words = blank(this.columns)
     words.set(this.bars.legendCells(theme, tone))
+    this.channels.legend(words, this.columns, this.bars.columns, theme, tone)
     return base64(new Uint8Array(words.buffer))
   }
 }

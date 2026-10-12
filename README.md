@@ -2,7 +2,7 @@
 
 A music visualizer for [Claude Code](https://claude.com/claude-code). A spectrum analyzer above your prompt that moves with what Claude is doing: thinking, streaming its reply, calling tools, and running subagents, each in a channel of its own.
 
-![The band above the Claude Code prompt playing /viz demo: a brainwave while it thinks, then drums, with tool names over their bands, and two subagents opening channels of their own at the right, then closing them once done](docs/demo.gif)
+![The band above the Claude Code prompt playing /viz demo: a brainwave while it thinks, then drums, with tool names over their bands, and two subagents opening channels of their own at the right, each in turn growing across the band as the main spectrum shrinks, then closing them once done](docs/demo.gif)
 
 ```
                           Grep        Write      Bash      WebFetch      Agent
@@ -47,6 +47,7 @@ Each kind of activity is an instrument with its own place on the spectrum, low t
 - **Tool calls:** a hit on the tool's band, then a held note while it runs. Its name shows over the band and fades a few seconds after it finishes.
 - **Prompts and turns:** sending a prompt sweeps up the spectrum. Finishing a turn crashes a cymbal, and interrupting one sweeps back down.
 - **Subagents:** each subagent plays in a channel of its own, to the right of the main spectrum, its own small spectrum with a bar for each instrument. Over it are the agent's name, in a color of its own, and what it's doing: the tool it's running, `thinking`, or `waiting` in amber when it asks your permission (the band waits on you too). A channel opens as its agent starts, the main spectrum's bars narrowing to make room. When the agent finishes, the channel says `done`, `failed` or `stopped`, and a few seconds later closes the way it opened, the main spectrum widening back and any channels after it sliding over. The main spectrum keeps at least half the width; agents beyond what fits wait, counted at the right edge (`+2`), and one opens at the end as the first to finish closes, so the main spectrum holds still. With `/viz mini`, they're named in the trail beside the strip instead.
+- **Focus:** open a subagent's transcript from the tasks list and its channel grows to take most of the band as the main spectrum shrinks to a channel's width, the two moving together over half a second. Grown, the channel is labeled the way the main spectrum is: the subagent's name in its color, then its tools over their bands. Shrunk, the main spectrum is labeled the way a channel is, `main` and what it's doing, with the context meter still at its right edge. Other channels hold still. Back on the main transcript, or once the subagent finishes and its channel closes, each goes back to its own size. A subagent with no channel to grow (with `/viz mini`, on a band too narrow for channels, or one waiting for a channel, counted in `+2`) plays on the main spectrum instead, its name leading the labels. With `/viz mini`, the trail names it first, then `main`. `/viz demo` shows it: once both its subagents' channels are open, it opens each one's transcript in turn, then goes back to the main conversation's.
 - **Errors:** a tool that fails flashes the bars red, or a subagent's channel when it's the subagent's. A call that's refused or interrupted doesn't, since it never ran.
 - **Waiting on you:** when Claude asks your permission, or asks you a question, the bars turn amber and the waiting tool's band pulses in time, labeled `waiting on you` with how long it's been. After half a minute the pulses shrink. In auto mode the pulse only starts if the classifier hands the call to you, never while it's still deciding, and a permission ask waits 1.5 seconds before the pulse starts, so one a hook answers on its own doesn't flash it. The pulse stops once the tool runs (for Bash, when its run-in-background hint shows) or finishes. Claude Code hides the band above the prompt while a dialog is up, so this shows in the pane (`/viz pane`).
 - **Context:** a meter at the right edge fills as the context window does, green, then amber, then red, its top where auto-compact runs. Every 10 seconds, and when a new reading comes in, a glint runs up it. The band and the pane label it `context 72%`, the share of the window in use. Compacting sweeps down the spectrum, labeled `compacting`, until it's done, and the meter drains. After `/clear` it shows an estimate of the fresh conversation until the first reply, and turning auto-compact on or off in `/config` moves its top.
@@ -77,7 +78,7 @@ This needs a Claude Code build with plugin function hooks: it was built against 
 | `/viz mini` | a small spectrum at the right edge, with tool names beside it |
 | `/viz pos [above\|below]` | the band above the prompt (default), or below it, over the hint line; no place switches |
 | `/viz pane` | a big view with a legend (docked beside the transcript in fullscreen) |
-| `/viz demo` | play a few seconds of thinking and drums, with two subagents in their channels, without a turn |
+| `/viz demo` | play a few seconds of thinking and drums, with two subagents in their channels, each opened in turn, without a turn |
 | `/viz idle [on\|off]` | the idle show (on by default); off leaves the bars flat |
 | `/viz theme [name]` | `instrument` (default), `claude`, `synthwave`, `classic`; no name cycles |
 | `/viz ground [auto\|light\|dark]` | your terminal's background; `auto` (default) follows Claude Code's theme; no argument says what it's using |
@@ -106,7 +107,7 @@ Its hooks, all in `hooks/register.tsx`:
 | `classic.PermissionRequest` | when Claude Code is about to ask you to allow a tool, the band pulses amber until you answer. It decides nothing, and passes the request on as it came; the plugin has no hook on the permission decision itself |
 | `config.set` (`theme`, `autoCompact`) | when you change Claude Code's theme or auto-compact, it reads the new setting a moment later, to paint for the background or move the meter's top. The change passes on as it came |
 | `session.measure`, `session.compact`, `classic.SessionStart` | the context meter: its fill, a rewind while compacting, an estimate after `/clear` |
-| `ui.render` (`AbovePrompt`, `PromptHint`, `Pane`, `CommandOutput`, `ToolProgress`) | draws the band, the pane and `/viz doctor`'s swatches; a tool's progress row means a permission ask was answered |
+| `ui.render` (`AbovePrompt`, `PromptHint`, `Pane`, `CommandOutput`, `ToolProgress`) | draws the band, the pane and `/viz doctor`'s swatches, and reads which transcript is in view, to put a subagent in focus; a tool's progress row means a permission ask was answered |
 | `ui.close` | notes that the pane closed |
 | `command.run` (`viz`) | answers `/viz` |
 
@@ -132,7 +133,7 @@ claude plugin test .           # tests/*.test.tsx against the engine
 
 Claude Code generates the API typings in `.claude-plugin/types/` when it loads the plugin (they're git-ignored). After that, `tsc -p .` type-checks the plugin.
 
-`scripts/demo-gif/make.sh` remakes `docs/demo.gif`. It starts `claude --plugin-dir .` in a pseudo-terminal, types `/viz demo`, records it, and renders the band and the prompt as a GIF. It needs ffmpeg, and installs pyte in a throwaway virtualenv. The band plays with your saved `/viz` settings, and nothing goes to the model.
+`scripts/demo-gif/make.sh` remakes `docs/demo.gif`. It starts `claude --plugin-dir .` in a pseudo-terminal, types `/viz demo`, records it, and renders the band and the prompt as a GIF. It needs ffmpeg, and installs pyte in a throwaway virtualenv. The band plays with your saved `/viz` settings, and nothing goes to the model. The renderer looks for the band above the prompt, so with `/viz pos below` saved it draws only the prompt: switch to `/viz pos above` while you record.
 
 ## License
 

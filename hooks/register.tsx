@@ -134,6 +134,10 @@ export const register: Register = on => {
   // The prompt's column less the band's five, as the band above is told it:
   // narrower beside a docked pane. The hint line is told only the screen's.
   let bodyColumns: number | undefined
+  // The subagent whose transcript the person has open, as the band above and
+  // the pane are told it; none for the main conversation's. The hint line is
+  // not told it, and the band below draws for what the band above was last told.
+  let viewed: string | undefined
   // Runs the frames until the music stops and the bars have fallen; made by
   // session.start, whose `$` the frames draw through.
   let wake = () => {}
@@ -144,6 +148,9 @@ export const register: Register = on => {
     tone = toneFor(prefs.ground, backdrop)
   }
   const drawn = () => ({ hasPane: sites.has(PANE), hasBand: [...sites.keys()].some(id => id !== PANE) })
+  // The subagent in view while it is on stage, which the drawings put in focus;
+  // else the one whose transcript the demo has opened.
+  const inView = () => ensemble.find(viewed) ?? ensemble.find(spectrum.demoView)
 
   // A call decided, its ask answered; `answer` wakes the frames too, which a
   // drawing may not do (it writes state), so a drawing settles it and the frames notice.
@@ -258,11 +265,12 @@ export const register: Register = on => {
       spectrum.ambient = isAmbient(prefs, drawn()) && ensemble.isCalm()
       spectrum.step(elapsed)
       ensemble.step(elapsed)
-      for (const site of sites.values()) site.board.step(spectrum, ensemble)
+      const focus = inView()
+      for (const site of sites.values()) site.board.step(spectrum, ensemble, focus)
       for (const site of sites.values()) {
         if (site.retryAt !== undefined && spectrum.now < site.retryAt) continue
-        blit(site, site.key, site.board.paint(prefs.theme, spectrum, ensemble, site.labels, tone))
-        if (site.names) blit(site, site.names.key, trail(spectrum, prefs.theme, site.names.columns, site.names.rows, tone, ensemble))
+        blit(site, site.key, site.board.paint(prefs.theme, spectrum, ensemble, site.labels, tone, focus))
+        if (site.names) blit(site, site.names.key, trail(spectrum, prefs.theme, site.names.columns, site.names.rows, tone, ensemble, focus))
         if (site.legend) blit(site, site.legend, site.board.legend(prefs.theme, tone))
       }
       const pacing = pace({
@@ -507,6 +515,7 @@ export const register: Register = on => {
   // The band as either site draws it: across `bodyColumns`, or mini at its right edge.
   const band = (ui: Pick<Elements['terminal'], 'Box' | 'Raster'>, requestId: string, s: VizSize, t: VizTheme, bodyColumns: number, room: number) => {
     const { Box, Raster } = ui
+    const focus = inView()
     if (s === 'mini') {
       const columns = clamp(Math.min(MINI_COLUMNS, bodyColumns), 1, 512)
       const rows = Math.min(MINI_ROWS, room)
@@ -516,8 +525,8 @@ export const register: Register = on => {
 
       return (
         <Box width={bodyColumns} justifyContent="flex-end">
-          {names && <Raster key="names" columns={names.columns} rows={rows} cells={trail(spectrum, t, names.columns, rows, tone, ensemble)} />}
-          <Raster key="mini" columns={columns} rows={rows} cells={site.board.paint(t, spectrum, ensemble, false, tone)} />
+          {names && <Raster key="names" columns={names.columns} rows={rows} cells={trail(spectrum, t, names.columns, rows, tone, ensemble, focus)} />}
+          <Raster key="mini" columns={columns} rows={rows} cells={site.board.paint(t, spectrum, ensemble, false, tone, focus)} />
         </Box>
       )
     }
@@ -526,7 +535,7 @@ export const register: Register = on => {
     const rows = Math.min(BAND_ROWS, room)
     const site = mount(requestId, 'band', columns, rows, { layout: wide(columns), labels: true })
 
-    return <Raster key="band" columns={columns} rows={rows} cells={site.board.paint(t, spectrum, ensemble, true, tone)} />
+    return <Raster key="band" columns={columns} rows={rows} cells={site.board.paint(t, spectrum, ensemble, true, tone, focus)} />
   }
 
   // Above the prompt: the band in the slot over the input.
@@ -539,7 +548,11 @@ export const register: Register = on => {
       read($, isPlaying),
       read($, isPaneOpen),
     ])
-    if (e.surface === 'terminal') isWorking = e.props.isWorking
+    if (e.surface === 'terminal') {
+      isWorking = e.props.isWorking
+      // A switch of transcript draws this again: told even while the band is down, for the band below.
+      viewed = e.props.view?.agentId
+    }
     if (e.surface === 'terminal' && e.props.bodyColumns !== bodyColumns) {
       const had = bodyColumns
       bodyColumns = e.props.bodyColumns
@@ -597,13 +610,14 @@ export const register: Register = on => {
     }
 
     const { Box, Raster } = $.ui.resolve(e)
+    viewed = e.props.view?.agentId
     const columns = clamp(e.props.bodyColumns, 1, 512)
     const rows = clamp(e.props.scroll.bodyRows - 1, 2, PANE_ROWS)
     const site = mount(PANE, 'pane', columns, rows, { layout: wide(columns), labels: true, legend: 'legend' })
 
     return (
       <Box flexDirection="column">
-        <Raster key="pane" columns={columns} rows={rows} cells={site.board.paint(t, spectrum, ensemble, true, tone)} />
+        <Raster key="pane" columns={columns} rows={rows} cells={site.board.paint(t, spectrum, ensemble, true, tone, inView())} />
         <Raster key="legend" columns={columns} rows={1} cells={site.board.legend(t, tone)} />
       </Box>
     )

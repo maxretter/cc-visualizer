@@ -1697,18 +1697,25 @@ describe('subagents', () => {
     }
   })
 
-  /** A board as wide as the band, 4 rows, and a way to move the music and it on together. */
+  /**
+   * A board as wide as the band, 4 rows, and a way to move the music and it on
+   * together; `view` opens a subagent's transcript, as the plugin is told it.
+   */
   const staging = () => {
     const spectrum = new Spectrum()
     const ensemble = new Ensemble()
     const board = new Board(80, 4, { width: 2, gap: 1, meter: true })
+    let viewed: string | undefined
     const step = (ms = FRAME_MS) => {
       spectrum.step(ms)
       ensemble.step(ms)
-      board.step(spectrum, ensemble)
+      board.step(spectrum, ensemble, ensemble.find(viewed))
     }
-    const paint = () => board.paint('instrument', spectrum, ensemble, true)
-    return { ensemble, board, step, paint, rows: () => text(paint(), 80) }
+    const paint = () => board.paint('instrument', spectrum, ensemble, true, 'dark', ensemble.find(viewed))
+    const view = (agentId?: string) => {
+      viewed = agentId
+    }
+    return { spectrum, ensemble, board, step, paint, view, rows: () => text(paint(), 80) }
   }
 
   test("channels sit at the right of the main bars, each its voice's spectrum, with its name in its color and what it is doing", () => {
@@ -1813,6 +1820,28 @@ describe('subagents', () => {
     expect(ensemble.isCalm()).toBe(true)
   })
 
+  test("the demo opens each subagent's transcript in turn, its channel growing into the band, then the main conversation's again", () => {
+    const spectrum = new Spectrum()
+    const ensemble = new Ensemble()
+    const board = new Board(80, 4, { width: 2, gap: 1, meter: true })
+    spectrum.playDemo(ensemble)
+    const views: (string | undefined)[] = []
+    let narrowest = 80
+    for (let t = 0; t < 12_000; t += FRAME_MS) {
+      spectrum.step()
+      ensemble.step()
+      const focus = ensemble.find(spectrum.demoView)
+      board.step(spectrum, ensemble, focus)
+      if (views.at(-1) !== focus?.name) views.push(focus?.name)
+      narrowest = Math.min(narrowest, board.bars.columns)
+    }
+    expect(views).toEqual(['scout', 'tests', undefined])
+    // The main bars narrowed to a channel's width, and are whole again once the subagents have left.
+    expect(narrowest).toBe(CHANNEL)
+    expect(board.bars.columns).toBe(80)
+    expect(spectrum.demoView).toBeUndefined()
+  })
+
   test('a demo played again over one still playing ends its subagents first: none is left at work', () => {
     const spectrum = new Spectrum()
     const ensemble = new Ensemble()
@@ -1841,6 +1870,89 @@ describe('subagents', () => {
     const [, bottom] = text(cells, 60)
     expect(bottom).toMatch(/Edit · [⠁-⣿] scout Grep {2}$/)
     expect(colors(cells, 60)[1]![bottom!.indexOf('scout')]).toBe(scout.color)
+  })
+
+  test("a subagent in view grows into the main bars' room as they narrow to a channel's width, together, and back once out of view", () => {
+    const { spectrum, ensemble, board, step, paint, view, rows } = staging()
+    const scout = ensemble.join('a1', { name: 'scout' })
+    ensemble.join('a2', { name: 'audit' })
+    scout.spectrum.startCall('Grep')
+    spectrum.startCall('Edit')
+    const main = 80 - 2 * CHANNEL
+    step()
+    expect(board.bars.columns).toBe(main)
+
+    view('a1')
+    const widths: number[] = []
+    const audit: number[] = []
+    for (let t = 0; t < 700; t += FRAME_MS) {
+      step()
+      widths.push(board.bars.columns)
+      audit.push(rows()[0]!.indexOf('audit'))
+    }
+    // The main bars narrow smoothly to a channel's width...
+    expect(widths.at(-1)).toBe(CHANNEL)
+    expect(new Set(widths).size).toBeGreaterThan(5)
+    for (let i = 1; i < widths.length; i++) expect(widths[i - 1]! - widths[i]!).toBeLessThan(4)
+    // ...as the channel grows by as much: the one after it holds still.
+    for (const at of audit) expect(at).toBe(main + CHANNEL + 2)
+
+    const top = rows()[0]!
+    // Narrowed, the main bars are labeled as a channel is.
+    expect(top.slice(0, CHANNEL)).toMatch(/^main [⠁-⣿] Edit/)
+    // Grown, the channel is labeled as the main bars were: its name in its color leading, its call over its band.
+    expect(top.slice(CHANNEL, main + CHANNEL)).toMatch(/^ {2}scout .*Grep/)
+    expect(colors(paint(), 80)[0]![CHANNEL + 2]).toBe(scout.color)
+    expect(top.slice(main + CHANNEL)).toMatch(/^ {2}audit/)
+
+    // Back on the main conversation: each shrinks or widens back to its own size.
+    view(undefined)
+    for (let t = 0; t < 700; t += FRAME_MS) step()
+    expect(board.bars.columns).toBe(main)
+    expect(rows()[0]!.slice(0, main)).toContain('Edit')
+    expect(rows()[0]!.slice(main, main + CHANNEL)).toMatch(/^ {2}scout [⠁-⣿] Grep/)
+  })
+
+  test('a subagent in view that ends says so over its grown channel, which shrinks back as it closes', () => {
+    const { spectrum, ensemble, board, step, view, rows } = staging()
+    ensemble.join('a1', { name: 'scout' })
+    spectrum.startCall('Edit')
+    view('a1')
+    for (let t = 0; t < 700; t += FRAME_MS) step()
+    expect(board.bars.columns).toBe(CHANNEL)
+    ensemble.end('a1', 'answer')
+    step()
+    // Labeled as the main bars are, from where its bars start.
+    expect(rows()[0]!.slice(CHANNEL)).toMatch(/^ {2,3}scout done/)
+    for (let t = 0; t < 4_000; t += 100) step(100)
+    expect(board.bars.columns).toBe(80)
+    expect(rows()[0]).toContain('Edit')
+    expect(rows()[0]).not.toContain('scout')
+  })
+
+  test('a subagent in view with no channel to grow, waiting for one, plays on the main bars, its name leading', () => {
+    const { spectrum, ensemble, board, step, view, rows } = staging()
+    for (const name of ['one', 'two']) ensemble.join(name, { name })
+    const three = ensemble.join('three', { name: 'three' })
+    three.spectrum.startCall('Grep')
+    spectrum.startCall('Edit')
+    view('three')
+    for (let t = 0; t < 700; t += FRAME_MS) step()
+    const main = 80 - 2 * CHANNEL
+    expect(board.bars.columns).toBe(main)
+    expect(rows()[0]!.slice(0, main)).toMatch(/^\s*three .*Grep/)
+    expect(rows()[0]!.slice(0, main)).not.toContain('Edit')
+  })
+
+  test('beside a mini spectrum playing a subagent in view, the trail names it first, then the main loop, then the others', () => {
+    const spectrum = new Spectrum()
+    const ensemble = new Ensemble()
+    const scout = ensemble.join('a1', { name: 'scout' })
+    ensemble.join('a2', { name: 'audit' })
+    scout.spectrum.startCall('Grep')
+    spectrum.endCall(spectrum.startCall('Edit'))
+    const [, bottom] = text(trail(spectrum, 'instrument', 60, 2, 'dark', ensemble, scout), 60)
+    expect(bottom).toMatch(/audit · main Edit · [⠁-⣿] scout Grep {2}$/)
   })
 })
 
@@ -1923,13 +2035,87 @@ describe('subagents, through the plugin', () => {
     await ui.unmount()
   })
 
-  test('/viz demo plays its subagents in channels at the right of the band', async ($, on) => {
+  test('/viz demo plays its subagents in channels at the right of the band, and opens each in turn', async ($, on) => {
     const { clock, ui, cells, viz } = await staged($, on)
+    const top = () => text(cells(), 80)[0] ?? ''
     await viz('demo')
-    await clock.advance(5_000)
-    const top = text(cells(), 80)[0] ?? ''
-    expect(top.slice(80 - 2 * CHANNEL)).toMatch(/^ {2}scout.* {2}tests/)
+    // The drums start 2.5 s in: both channels open, neither opened yet (tests, thinking, cut to fit).
+    await clock.advance(4_400)
+    expect(top().slice(80 - 2 * CHANNEL)).toMatch(/^ {2}scout.* {2}test/)
+    // Scout's transcript opened: its channel grown, the main bars narrowed.
+    await clock.advance(900)
+    expect(top().slice(0, CHANNEL)).toMatch(/^main/)
+    expect(top().slice(CHANNEL)).toMatch(/^ {2,3}scout/)
+    // Then tests': scout's back to a channel's width, tests' grown.
+    await clock.advance(1_400)
+    expect(top().slice(0, CHANNEL)).toMatch(/^main/)
+    expect(top().slice(CHANNEL, 2 * CHANNEL)).toMatch(/^ {2}scout/)
+    expect(top().slice(2 * CHANNEL)).toMatch(/^ {2,3}tests/)
+    // Then the main conversation's again.
+    await clock.advance(1_100)
+    expect(top().slice(80 - 2 * CHANNEL)).toMatch(/^ {2}scout.* {2}tests/)
     await ui.unmount()
+  })
+
+  /** The band above the prompt with subagent `agentId`'s transcript in view, or the main conversation's. */
+  const viewing = (agentId?: string) => ({ ...band(true), props: { ...band(true).props, view: agentId === undefined ? {} : { agentId } } })
+
+  test("opening a subagent's transcript grows its channel across the band as the main bars narrow, and back", async ($, on) => {
+    spawner(on)
+    const { clock, ui, cells, finish } = await staged($, on)
+    const top = () => text(cells(), 80)[0] ?? ''
+    const agentId = (await spawn($, 'scout')).agentId!
+    const read = $.tool.call({ tool: 'Read', file_path: '/src/auth.ts', tool_use_id: 't1', ...inLoop(agentId) })
+    const make = $.tool.call({ tool: 'Bash', command: 'make', tool_use_id: 't2' })
+    await clock.advance(600)
+    expect(top().slice(0, 80 - CHANNEL)).toContain('Bash')
+    expect(top().slice(80 - CHANNEL)).toMatch(/^ {2}scout [⠁-⣿] Read/)
+
+    await ui.unmount()
+    const focused = await $.ui.mount(viewing(agentId))
+    await clock.advance(700)
+    expect(top().slice(0, CHANNEL)).toMatch(/^main [⠁-⣿] Bash/)
+    expect(top().slice(CHANNEL)).toMatch(/^ {2,3}scout .*Read/)
+    expect(top().slice(CHANNEL)).not.toContain('Bash')
+    await focused.unmount()
+
+    const back = await $.ui.mount(viewing())
+    await clock.advance(700)
+    expect(top().slice(0, 80 - CHANNEL)).toContain('Bash')
+    expect(top().slice(80 - CHANNEL)).toMatch(/^ {2}scout [⠁-⣿] Read/)
+    finish('t1')
+    finish('t2')
+    await Promise.all([read, make])
+    await back.unmount()
+  })
+
+  test('the band below the prompt puts the subagent in view in focus too, as the band above is told it', async ($, on) => {
+    spawner(on)
+    on('ui.render', { component: 'PromptHint' }, ($, e) => {
+      const { Text } = $.ui.resolve(e)
+
+      return <Text>{e.props.hint}</Text>
+    })
+    const { clock, ui, cells, viz } = await staged($, on)
+    await viz('pos below')
+    const agentId = (await spawn($, 'scout')).agentId!
+    await ui.unmount()
+    // Above the prompt the engine draws its own, and the plugin is told which transcript is in view all the same.
+    const above = await $.ui.mount(viewing(agentId))
+    const below = await $.ui.mount({
+      plugin: 'visualizer',
+      surface: 'terminal' as const,
+      component: 'PromptHint' as const,
+      requestId: 'hint',
+      viewport: { columns: 85, rows: 40, isFullscreen: true },
+      props: { isDraft: false, isWorking: true, hint: '? for shortcuts' },
+    })
+    await clock.advance(1_200)
+    const top = text(cells(), 80)[0] ?? ''
+    expect(top.slice(0, CHANNEL)).toMatch(/^main/)
+    expect(top.slice(CHANNEL)).toMatch(/^ {2,3}scout/)
+    await below.unmount()
+    await above.unmount()
   })
 
   test('after a reload, the subagents still at work are back in their channels, open at once', async ($, on) => {
