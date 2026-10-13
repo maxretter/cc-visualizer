@@ -134,6 +134,25 @@ describe('the pane', () => {
   })
 })
 
+describe('other surfaces', () => {
+  test("a drawing on the desktop leaves the terminal's band playing", async ($, on) => {
+    const { clock, ui, blits, finish } = await staged($, on)
+    const call = $.tool.call({ tool: 'Bash', command: 'make', tool_use_id: 't1' })
+    await clock.advance(500)
+
+    // The desktop draws the same instance, by the same id.
+    const desktop = await $.ui.mount({ ...band(true), surface: 'desktop' as const })
+    expect(await desktop.find({ type: 'Raster', key: 'band' })).toBeUndefined()
+    const sent = blits('band')
+    await clock.advance(500)
+    expect(blits('band') - sent).toBeGreaterThan(5)
+    finish('t1')
+    await call
+    await desktop.unmount()
+    await ui.unmount()
+  })
+})
+
 describe('place', () => {
   const run = (args: string) => ({
     command: 'viz',
