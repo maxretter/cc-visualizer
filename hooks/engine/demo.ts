@@ -101,7 +101,10 @@ export class Demo {
 
   /** Plays it from the start, `ms` long; with an `ensemble`, its subagents join it. */
   play(ensemble: Ensemble | undefined, ms: number) {
-    // A demo played again over one still playing: its subagents end first.
+    // A demo played again over one still playing: its drum call and its
+    // subagents end first, as that call's end is on the old demo's clock.
+    if (this.call !== undefined) this.spectrum.endCall(this.call.call)
+    this.call = undefined
     this.finishParts()
     this.left = ms
     this.length = ms
