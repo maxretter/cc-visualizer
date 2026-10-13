@@ -4,7 +4,7 @@ import { Bars } from '../hooks/engine/bars'
 import { idleText } from '../hooks/engine/names'
 import { IDLE_DELAY, Spectrum } from '../hooks/engine/spectrum'
 import { trail } from '../hooks/engine/trail'
-import { prefsStore, text } from './support'
+import { prefsStore, staged, text } from './support'
 
 describe('idle', () => {
   const run = (args: string) => ({
@@ -84,6 +84,32 @@ describe('idle', () => {
     spectrum.hit('read')
     for (let i = 0; i < 30; i++) spectrum.step()
     expect(text(trail(spectrum, 'instrument', 30, 2), 30).join('')).not.toContain('idle')
+  })
+
+  test('no idle show while a subagent works, though the main loop rests; it comes once the subagent is done', async ($, on) => {
+    on('agent.spawn', () => ({ model: 'claude-haiku-5-5', agentId: 'a1' }))
+    const { clock, ui, label } = await staged($, on)
+    await $.agent.spawn({
+      tool_use_id: 'spawn-scout',
+      prompt: 'Look around.',
+      description: 'Look for the handlers',
+      subagentType: 'Explore',
+      provider: { plugin: 'engine', tier: 'core' },
+      parentModel: 'claude-opus-5-5',
+      background: true,
+      fork: false,
+      name: 'scout',
+    })
+    await clock.advance(12_000)
+    expect(label()).toContain('scout')
+    expect(label()).not.toContain('idle')
+
+    await $.turn.complete({ reason: 'answer', answer: 'Found it.', durationMs: 1000, isAborted: false, turnId: 'u1', agentId: 'a1' })
+    await clock.advance(4000)
+    expect(label()).not.toContain('scout')
+    await clock.advance(8000)
+    expect(label()).toMatch(/^\s*idle/)
+    await ui.unmount()
   })
 
   test('/viz idle toggles the show and remembers it', async ($, on) => {
