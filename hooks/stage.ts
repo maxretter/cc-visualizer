@@ -5,6 +5,7 @@
 import type { Layout } from './engine/bars'
 import { Board } from './engine/board'
 import type { Tone } from './engine/color'
+import { Demo } from './engine/demo'
 import { Ensemble } from './engine/ensemble'
 import { Spectrum } from './engine/spectrum'
 import { trail } from './engine/trail'
@@ -36,6 +37,8 @@ export class Stage {
   // main loop plays on the spectrum, each subagent on its own voice.
   readonly spectrum = new Spectrum()
   readonly ensemble = new Ensemble()
+  // /viz demo, played on the main spectrum, its subagents joining the ensemble.
+  readonly demo = new Demo(this.spectrum, this.ensemble)
   readonly sites = new Map<string, Site>()
   // The context window's size, and where auto-compact runs in it (1 when it is
   // off): unknown until a measure comes with its breakdown, which only a
@@ -77,7 +80,7 @@ export class Stage {
   // The subagent in view while it is on stage, which the drawings put in focus;
   // else the one whose transcript the demo has opened.
   inView() {
-    return this.ensemble.find(this.viewed) ?? this.ensemble.find(this.spectrum.demoView)
+    return this.ensemble.find(this.viewed) ?? this.ensemble.find(this.demo.view)
   }
 
   measured(context: Measured) {
@@ -125,7 +128,7 @@ export class Stage {
     const { spectrum, ensemble, sites, prefs, tone } = this
     // No idle show while a subagent works, though the main loop rests.
     spectrum.ambient = isAmbient(prefs, this.drawn()) && ensemble.isCalm()
-    spectrum.step(elapsed)
+    spectrum.step(elapsed, this.demo)
     ensemble.step(elapsed)
     const focus = this.inView()
     for (const site of sites.values()) site.board.step(spectrum, ensemble, focus)
@@ -137,7 +140,7 @@ export class Stage {
     }
     const held = [...sites.values()].filter(site => site.retryAt !== undefined).length
     return pace({
-      isCalm: spectrum.isCalm() && ensemble.isStill(),
+      isCalm: spectrum.isCalm() && !this.demo.isPlaying && ensemble.isStill(),
       isAmbient: spectrum.ambient,
       isResting: spectrum.isResting(),
       isQuiet: spectrum.isQuiet(),

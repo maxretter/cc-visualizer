@@ -572,7 +572,7 @@ export const register: Register = on => {
       else sites.delete(PANE)
       await notePane($)
     }
-    if (outcome.isDemo) spectrum.playDemo(ensemble)
+    if (outcome.isDemo) stage.demo.play()
     const before = stage.prefs
     stage.prefs = outcome.prefs
     stage.retone()

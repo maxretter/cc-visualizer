@@ -5,6 +5,7 @@ import type { Engine } from 'claude-code/testing'
 import { Bars } from '../hooks/engine/bars'
 import { Board } from '../hooks/engine/board'
 import { CHANNEL, channelsFit } from '../hooks/engine/channels'
+import { Demo } from '../hooks/engine/demo'
 import { Ensemble } from '../hooks/engine/ensemble'
 import { FRAME_MS } from '../hooks/engine/math'
 import { Spectrum } from '../hooks/engine/spectrum'
@@ -240,13 +241,14 @@ describe('subagents', () => {
   test('the demo brings in two subagents, which play, say they are done, and leave before it ends', () => {
     const spectrum = new Spectrum()
     const ensemble = new Ensemble()
-    spectrum.playDemo(ensemble)
+    const demo = new Demo(spectrum, ensemble)
+    demo.play()
     const seen = new Set<string>()
     const tools = new Set<string>()
     let together = false
     let done = 0
     for (let t = 0; t < 11_400; t += FRAME_MS) {
-      spectrum.step()
+      spectrum.step(FRAME_MS, demo)
       ensemble.step()
       if (ensemble.voices.length === 2) together = true
       for (const voice of ensemble.voices) {
@@ -267,13 +269,14 @@ describe('subagents', () => {
     const spectrum = new Spectrum()
     const ensemble = new Ensemble()
     const board = new Board(80, 4, { width: 2, gap: 1, meter: true })
-    spectrum.playDemo(ensemble)
+    const demo = new Demo(spectrum, ensemble)
+    demo.play()
     const views: (string | undefined)[] = []
     let narrowest = 80
     for (let t = 0; t < 12_000; t += FRAME_MS) {
-      spectrum.step()
+      spectrum.step(FRAME_MS, demo)
       ensemble.step()
-      const focus = ensemble.find(spectrum.demoView)
+      const focus = ensemble.find(demo.view)
       board.step(spectrum, ensemble, focus)
       if (views.at(-1) !== focus?.name) views.push(focus?.name)
       narrowest = Math.min(narrowest, board.bars.columns)
@@ -282,22 +285,23 @@ describe('subagents', () => {
     // The main bars narrowed to a channel's width, and are whole again once the subagents have left.
     expect(narrowest).toBe(CHANNEL)
     expect(board.bars.columns).toBe(80)
-    expect(spectrum.demoView).toBeUndefined()
+    expect(demo.view).toBeUndefined()
   })
 
   test('a demo played again over one still playing ends its subagents first: none is left at work', () => {
     const spectrum = new Spectrum()
     const ensemble = new Ensemble()
-    spectrum.playDemo(ensemble)
+    const demo = new Demo(spectrum, ensemble)
+    demo.play()
     for (let t = 0; t < 5_000; t += FRAME_MS) {
-      spectrum.step()
+      spectrum.step(FRAME_MS, demo)
       ensemble.step()
     }
     expect(ensemble.voices.length).toBe(2)
-    spectrum.playDemo(ensemble)
+    demo.play()
     expect(ensemble.voices.every(voice => voice.outcome === 'done')).toBe(true)
     for (let t = 0; t < 15_000; t += FRAME_MS) {
-      spectrum.step()
+      spectrum.step(FRAME_MS, demo)
       ensemble.step()
     }
     expect(ensemble.isCalm()).toBe(true)

@@ -2,6 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { Bars } from '../hooks/engine/bars'
 import { base64, blank, encodeBase64, write } from '../hooks/engine/cells'
+import { Demo } from '../hooks/engine/demo'
 import { FRAME_MS } from '../hooks/engine/math'
 import { clockText } from '../hooks/engine/names'
 import { sourceOf, SOURCES } from '../hooks/engine/sources'
@@ -50,9 +51,10 @@ describe('engine', () => {
   test('cells cover the whole raster in every theme', () => {
     const spectrum = new Spectrum()
     const bars = new Bars(37, 5)
-    spectrum.playDemo()
+    const demo = new Demo(spectrum)
+    demo.play()
     for (let i = 0; i < 30; i++) {
-      spectrum.step()
+      spectrum.step(FRAME_MS, demo)
       bars.step(spectrum)
     }
     for (const theme of ['instrument', 'claude', 'synthwave', 'classic'] as const) {
@@ -262,19 +264,20 @@ describe('cells', () => {
 describe('the demo', () => {
   test('played again mid-way, its drum call ends with the old one, and its own come in on time', () => {
     const spectrum = new Spectrum()
-    spectrum.playDemo()
+    const demo = new Demo(spectrum)
+    demo.play()
     // Into the drums, a call running that the new demo would not start first.
     let held: Call | undefined
     for (let t = 0; t < 8_000 || held === undefined; t += FRAME_MS) {
-      spectrum.step()
+      spectrum.step(FRAME_MS, demo)
       held = t >= 8_000 ? spectrum.calls.find(call => call.running > 0 && call.name !== 'Grep') : undefined
     }
-    spectrum.playDemo()
+    demo.play()
     expect(held?.running).toBe(0)
     // It thinks first, then its first call comes in a sixteenth into the drums.
     let first: number | undefined
     for (let t = 0; t < 4_000 && first === undefined; t += FRAME_MS) {
-      spectrum.step()
+      spectrum.step(FRAME_MS, demo)
       if (spectrum.calls.some(call => call.running > 0 && call.name === 'Grep')) first = t
     }
     expect(first).toBeGreaterThan(2_500)

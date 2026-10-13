@@ -13,8 +13,7 @@
 import { bump, cycle, ease, fade, FRAME_MS, random } from './math'
 import { INDEX, N, shortName, SIGMA, sourceOf, SOURCES } from './sources'
 import type { SourceId } from './sources'
-import { DEMO, Demo } from './demo'
-import type { Ensemble } from './ensemble'
+import type { Demo } from './demo'
 import { IdleShow } from './idle'
 import type { Scene } from './idle'
 import { Keys } from './keys'
@@ -99,15 +98,13 @@ export class Spectrum {
   /** A tool error's red flash, 1 fading to 0. */
   flash = 0
   /**
-   * Whether to play the idle show once the music stops: set by the drawing,
-   * which knows whether a band stays up while idle.
+   * Whether to play the idle show once the music stops: set by the stage at
+   * each frame, which knows whether a band stays up while idle.
    */
   ambient = false
-  /** Its chances, which its thinking, its idle show and its demo draw on. */
-  private readonly rand = random(0x1d1e)
+  /** Its chances, which its thinking, its idle show and a demo played on it draw on. */
+  readonly rand = random(0x1d1e)
   private crash = 0
-  /** The demo, played on this spectrum, drawing on its chances. */
-  private readonly demo = new Demo(this, this.rand)
   /** The latest tool calls, oldest first, while their names show. */
   readonly calls: Call[] = []
   /** The parts that play over the instruments. */
@@ -292,28 +289,17 @@ export class Spectrum {
     this.flash = 1
   }
 
-  /** Plays the demo, `ms` long; with an `ensemble`, its subagents join it, each in a channel of its own. */
-  playDemo(ensemble?: Ensemble, ms = DEMO) {
-    this.demo.play(ensemble, ms)
-    this.kick()
-  }
-
   /**
-   * The demo subagent whose transcript the demo has opened, by its voice's id,
-   * which the drawings put in focus as they do the one the person opens; none
-   * for the main conversation's.
+   * Moves the music on by `elapsed`: its clocks by all of it, the animation by
+   * up to `MAX_STEP`. A `demo` playing on it plays its part first, on the
+   * clock moved on.
    */
-  get demoView(): string | undefined {
-    return this.demo.view
-  }
-
-  /** Moves the music on by `elapsed`: its clocks by all of it, the animation by up to `MAX_STEP`. */
-  step(elapsed = FRAME_MS) {
+  step(elapsed = FRAME_MS, demo?: Demo) {
     const passed = Math.max(0, elapsed)
     const ms = Math.min(passed, MAX_STEP)
     this.now += passed
     this.dt = ms
-    if (this.demo.isPlaying) this.demo.step(ms)
+    if (demo?.isPlaying) demo.step(ms)
     const t = this.now
     this.vamp.step(t, passed, ms)
     const { hushed } = this.vamp
@@ -417,6 +403,7 @@ export class Spectrum {
   /**
    * Nothing moving but the shows, which can go on for a long time and draw at
    * a slower rate: the idle show, and the vamp while the person is waited on.
+   * A demo playing on it is for whoever plays it to ask after.
    */
   isCalm(): boolean {
     return (
@@ -426,7 +413,6 @@ export class Spectrum {
       this.mind === 0 &&
       this.crash === 0 &&
       this.flash === 0 &&
-      !this.demo.isPlaying &&
       this.calls.every(call => call.running > 0 && call.running <= this.vamp.waitingOn(this.now, call)) &&
       this.keys.isCalm() &&
       this.sweep.isCalm() &&
