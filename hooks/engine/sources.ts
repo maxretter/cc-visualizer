@@ -20,6 +20,8 @@ export const SOURCES: readonly Source[] = [
 
 export const N = SOURCES.length
 export const INDEX = Object.fromEntries(SOURCES.map((s, i) => [s.id, i])) as Record<SourceId, number>
+/** How wide an instrument plays about its place: the width of its bump. */
+export const SIGMA = 0.055
 
 const READ = new Set(['Read', 'Grep', 'Glob', 'LS', 'NotebookRead', 'LSP', 'ToolSearch', 'ListMcpResourcesTool', 'ReadMcpResourceTool'])
 const EDIT = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])

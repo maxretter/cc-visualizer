@@ -147,7 +147,7 @@ async function rejoinAgents($: EngineInterface, stage: Stage) {
 
 export const register: Register = on => {
   const stage = new Stage(PANE)
-  const { spectrum, ensemble, sites } = stage
+  const { spectrum, sites } = stage
   // The frames, kept through a start again, which finds them as they run.
   const frames = new Frames(stage)
 
@@ -438,7 +438,7 @@ export const register: Register = on => {
           else sites.delete(PANE)
           await notePane($)
         }
-        if (outcome.isDemo) spectrum.playDemo(ensemble)
+        if (outcome.isDemo) stage.demo.play()
         const before = stage.prefs
         stage.prefs = outcome.prefs
         await publish($, stage.prefs)

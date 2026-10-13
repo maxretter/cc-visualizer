@@ -8,7 +8,7 @@ import type { Ensemble, Voice } from './ensemble'
 const DEMO_TOOLS = ['Grep', 'Read', 'Read', 'Edit', 'Bash', 'WebFetch', 'Agent', 'Write']
 
 /** How long the demo plays, and how long it thinks before the drums come in. */
-export const DEMO = 11_400
+const DEMO = 11_400
 const DEMO_THINK = 2_500
 /** The demo's drum machine: a sixteenth note (113 bpm), and how long each tool it calls runs. */
 const SIXTEENTH = 132
@@ -69,7 +69,9 @@ type DemoPart = { agent: DemoAgent; voice?: Voice; next: number; running: { call
 /**
  * The demo, played on a spectrum without a turn: a spell of thinking, then a
  * drum machine of tool calls; with an ensemble, two subagents join it, each in
- * a channel of its own, and their transcripts are opened in turn.
+ * a channel of its own, and their transcripts are opened in turn. It plays
+ * its part at each of the spectrum's steps it is handed to, and draws on the
+ * spectrum's chances.
  */
 export class Demo {
   /** How long it has left, how long it is, and the next sixteenth its drums play. */
@@ -78,8 +80,7 @@ export class Demo {
   private next = 0
   private isThinking = false
   private call: { call: Call; endAt: number } | undefined
-  /** Its subagents: the ensemble they join, and how far along each is. */
-  private ensemble: Ensemble | undefined
+  /** Its subagents, and how far along each is. */
   private parts: DemoPart[] = []
   /**
    * The subagent whose transcript it has opened, by its voice's id, which the
@@ -89,9 +90,10 @@ export class Demo {
   view: string | undefined
   private views = 0
 
+  /** `spectrum`: what it plays on; `ensemble`: what its subagents join, and without one, it plays without them. */
   constructor(
     private readonly spectrum: Spectrum,
-    private readonly rand: () => number,
+    private readonly ensemble?: Ensemble,
   ) {}
 
   /** Whether it is playing. */
@@ -99,8 +101,8 @@ export class Demo {
     return this.left > 0
   }
 
-  /** Plays it from the start, `ms` long; with an `ensemble`, its subagents join it. */
-  play(ensemble: Ensemble | undefined, ms: number) {
+  /** Plays it from the start, `ms` long, sweeping up the spectrum as a prompt sent does; with an ensemble, its subagents join it. */
+  play(ms = DEMO) {
     // A demo played again over one still playing: its drum call and its
     // subagents end first, as that call's end is on the old demo's clock.
     if (this.call !== undefined) this.spectrum.endCall(this.call.call)
@@ -109,10 +111,10 @@ export class Demo {
     this.left = ms
     this.length = ms
     this.next = 0
-    this.ensemble = ensemble
-    this.parts = ensemble === undefined ? [] : DEMO_AGENTS.map(agent => ({ agent, next: 0, running: [], isThinking: false, isDone: false }))
+    this.parts = this.ensemble === undefined ? [] : DEMO_AGENTS.map(agent => ({ agent, next: 0, running: [], isThinking: false, isDone: false }))
     this.view = undefined
     this.views = 0
+    this.spectrum.kick()
   }
 
   /**
@@ -130,7 +132,7 @@ export class Demo {
         this.isThinking = true
         spectrum.beginThinking()
       }
-      spectrum.stream('think', 12 * this.rand() * frames)
+      spectrum.stream('think', 12 * spectrum.rand() * frames)
       return
     }
     if (this.isThinking) {
@@ -188,7 +190,7 @@ export class Demo {
       spectrum.endCall(part.running[i]!.call)
       part.running.splice(i, 1)
     }
-    if (part.isThinking) spectrum.stream('think', 10 * this.rand() * frames)
+    if (part.isThinking) spectrum.stream('think', 10 * this.spectrum.rand() * frames)
     for (; part.next < agent.calls.length && agent.calls[part.next]![0] <= drums; part.next++) {
       const [, tool, ms] = agent.calls[part.next]!
       if (part.isThinking) {
@@ -198,7 +200,7 @@ export class Demo {
       spectrum.stream('args', 30)
       part.running.push({ call: spectrum.startCall(tool), endAt: drums + ms })
     }
-    if (drums >= agent.ends - DEMO_ANSWER && part.running.length === 0) spectrum.stream('text', (5 + 4 * this.rand()) * frames)
+    if (drums >= agent.ends - DEMO_ANSWER && part.running.length === 0) spectrum.stream('text', (5 + 4 * this.spectrum.rand()) * frames)
     if (drums >= agent.ends) this.finishPart(part)
   }
 

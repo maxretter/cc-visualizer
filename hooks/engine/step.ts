@@ -3,8 +3,12 @@
 import { sourceOf } from './sources'
 import type { Spectrum } from './spectrum'
 
-/** A piece of a model's response as it streams, as much of it as the music needs. */
-export type Chunk = { kind: string; text?: string; name?: string; json?: string }
+/**
+ * A piece of a model's response as it streams, as much of it as the music
+ * needs, by its kind: text, thinking, a tool call's start and its arguments,
+ * and the rest (the stop, the engine's own), which play nothing.
+ */
+export type Chunk = { kind: 'text' | 'thinking'; text?: string } | { kind: 'tool'; name?: string } | { kind: 'input'; json?: string } | { kind: 'stop' | 'engine' }
 
 /**
  * One model request as it streams. It thinks from the request until its
