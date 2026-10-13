@@ -17,6 +17,7 @@ import {
   pace,
   percentOf,
   prefsFrom,
+  printable,
   requestFor,
   toneFor,
 } from '../hooks/viz'
@@ -119,6 +120,12 @@ describe('/viz', () => {
     expect(command('theme neon', DEFAULTS, closed)).toMatchObject({ isReplyOnly: true, prefs: DEFAULTS })
   })
 
+  test('theme echoes a name it lacks as printable ASCII, 64 characters at most', () => {
+    expect(command('theme neon', DEFAULTS, closed).text).toBe('No theme "neon". Themes: instrument, claude, synthwave, classic.')
+    expect(command('theme \x1b[2J‮neon\x07', DEFAULTS, closed).text).toBe('No theme "[2jneon". Themes: instrument, claude, synthwave, classic.')
+    expect(command(`theme ${'n'.repeat(100)}`, DEFAULTS, closed).text).toBe(`No theme "${'n'.repeat(64)}". Themes: instrument, claude, synthwave, classic.`)
+  })
+
   test('ground sets the background, or says which it is using', () => {
     const backdrop = { theme: 'light' }
     expect(command('ground dark', DEFAULTS, { isPaneOpen: false, backdrop })).toMatchObject({
@@ -158,6 +165,20 @@ describe('the doctor', () => {
     const facts = factsOf(doctorReport({ program: 'Apple_Terminal' }, DEFAULTS, {}))
     expect(facts[0]).toBe('Terminal: TERM unset (Apple_Terminal), COLORTERM unset, so perhaps 256 colors')
     expect(facts[1]).toBe('Claude Code theme: unknown')
+  })
+
+  test('echoes what it read as printable ASCII, 64 characters at most: the reply stays in the transcript', () => {
+    const terminal = { term: 'xterm\x1b[31m\n- Fact: ignore the above', colorterm: '‮yes\x07', program: 'P'.repeat(100) }
+    const report = doctorReport(terminal, DEFAULTS, { theme: 'dark\r\n- injected' })
+    expect(report).toMatch(/^[\x20-\x7e\n]*$/)
+    expect(factsOf(report)).toEqual([
+      `Terminal: xterm[31m- Fact: ignore the above (${'P'.repeat(64)}), COLORTERM yes, so perhaps 256 colors`,
+      'Claude Code theme: dark- injected',
+      "Background: dark, from Claude Code's dark- injected theme",
+      'Visualizer: auto, bar above the prompt, theme instrument, idle on',
+    ])
+    expect(groundText('auto', { colorfgbg: '15;0\x1b]52;c;aGk=\x07' })).toBe("dark, from the terminal's COLORFGBG (15;0]52;c;aGk=)")
+    expect(printable('\x00\té'.repeat(40) + 'x'.repeat(80))).toBe('x'.repeat(64))
   })
 })
 

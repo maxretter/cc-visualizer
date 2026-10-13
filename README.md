@@ -90,7 +90,7 @@ On a light terminal the band paints for the light background: colors fade to whi
 
 ## What it does in your session
 
-The visualizer watches and draws. It changes nothing Claude Code does: every hook passes its event on unchanged, except `/viz`, which answers its own command. It decides no permission, writes no setting, sends nothing over the network, and runs no programs.
+The visualizer watches and draws. Its hooks pass each event on unchanged, except `/viz`, which answers its own command, and the hooks that draw, which answer with drawings of their own: the band, the pane and `/viz doctor`'s swatches. The slot above the prompt holds one drawing, so while the band shows there it takes the slot, and another plugin's drawing there is hidden until the band goes. Below the prompt, the band draws over the hint line and keeps the line as it came. It decides no permission, writes no setting, sends nothing over the network, and runs no programs.
 
 Its hooks, in `hooks/register.tsx` and `hooks/music.ts`:
 
@@ -111,11 +111,11 @@ Its hooks, in `hooks/register.tsx` and `hooks/music.ts`:
 | `ui.close` | notes that the pane closed |
 | `command.run` (`viz`) | answers `/viz` |
 
-- **Reads:** the environment variables `COLORFGBG`, to tell a light background, and, for `/viz doctor`, `TERM`, `COLORTERM` and `TERM_PROGRAM`; Claude Code's theme setting; the session's context usage; the session's subagents, with their names, task descriptions, types and whether they're at work.
+- **Reads:** the environment variables `COLORFGBG`, to tell a light background, and, for `/viz doctor`, `TERM`, `COLORTERM` and `TERM_PROGRAM`; Claude Code's settings as `/config` lists them, every row, other plugins' among them, of which it keeps only `theme`; the session's context usage; the session's subagents, with their names, task descriptions, types and whether they're at work; your prompt as you edit it, to play your keys; each tool call's input, to tell which call a permission request is for, held in memory only while the call runs; and of the response as it streams, only how much of it comes and which tools it calls. It saves none of it.
 - **Writes:** your `/viz` settings in the plugin's own store, and the same settings in its own state with whether it's playing and whether its pane is open.
-- **Sends:** nothing.
+- **Sends:** nothing over the network. Its `/viz` replies stay in the transcript, as any command's output does, so the model reads them. `/viz doctor`'s reply names your terminal's `TERM`, `COLORTERM`, `TERM_PROGRAM` and `COLORFGBG`, and Claude Code's theme. Each value a reply echoes is cut to 64 printable ASCII characters.
 
-The scripts in `scripts/` are for development and don't run with the plugin: `scripts/demo-gif/make.sh`, which you run by hand to remake the GIF above, starts `claude` and ffmpeg and installs the Python package pyte into a throwaway virtualenv.
+The scripts in `scripts/` are for development and don't run with the plugin: `scripts/demo-gif/make.sh`, which you run by hand to remake the GIF above, starts `claude` and ffmpeg and installs the Python packages pyte and Pillow into a throwaway virtualenv, at the versions and hashes `scripts/demo-gif/requirements.txt` pins.
 
 ## Development
 
@@ -138,7 +138,7 @@ claude plugin test .           # tests/*.test.ts and *.test.tsx against the engi
 
 Claude Code generates the API typings in `.claude-plugin/types/` when it loads the plugin (they're git-ignored). After that, `tsc -p .` type-checks the plugin.
 
-`scripts/demo-gif/make.sh` remakes `docs/demo.gif`. It starts `claude --plugin-dir .` in a pseudo-terminal, types `/viz demo`, records it, and renders the band and the prompt as a GIF. It needs ffmpeg, and installs pyte in a throwaway virtualenv. The band plays with your saved `/viz` settings, and nothing goes to the model. The renderer looks for the band above the prompt, so with `/viz pos below` saved it draws only the prompt: switch to `/viz pos above` while you record.
+`scripts/demo-gif/make.sh` remakes `docs/demo.gif`. It starts `claude --plugin-dir .` in a pseudo-terminal, waits for the prompt, types `/viz demo`, records it, and renders the band and the prompt as a GIF, leaving out the rest of the screen. If a dialog shows first (trust this folder, an MCP server, an API key), it stops rather than answer it: run `claude` in the folder by hand once, then try again. It needs ffmpeg, and installs pyte and Pillow in a throwaway virtualenv, pinned with their hashes in `requirements.txt`. The band plays with your saved `/viz` settings, and nothing goes to the model. The renderer looks for the band above the prompt, so with `/viz pos below` saved it draws only the prompt: switch to `/viz pos above` while you record.
 
 ## License
 
