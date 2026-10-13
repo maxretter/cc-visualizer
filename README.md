@@ -92,7 +92,7 @@ On a light terminal the band paints for the light background: colors fade to whi
 
 The visualizer watches and draws. It changes nothing Claude Code does: every hook passes its event on unchanged, except `/viz`, which answers its own command. It decides no permission, writes no setting, sends nothing over the network, and runs no programs.
 
-Its hooks, all in `hooks/register.tsx`:
+Its hooks, in `hooks/register.tsx` and `hooks/music.ts`:
 
 | Hook | What it does |
 | --- | --- |
@@ -122,14 +122,19 @@ The scripts in `scripts/` are for development and don't run with the plugin: `sc
 ```
 claude --plugin-dir .          # run it from this folder; saving a file reloads it
 claude plugin validate .       # what the engine sees and would refuse
-claude plugin test .           # tests/*.test.tsx against the engine
+claude plugin test .           # tests/*.test.ts and *.test.tsx against the engine
 ```
 
-- `hooks/engine.ts`: the music and its drawing. It's pure, so it's easy to test.
+- `hooks/engine/`: the music and its drawing, a file for each part. It's pure, so it's easy to test.
+  - The music: `spectrum.ts`, each instrument's energy and the shows over it; `step.ts` plays a model request on it as it streams, `demo.ts` plays `/viz demo`, and `ensemble.ts` gives each subagent a spectrum of its own.
+  - The drawing: `bars.ts` draws a spectrum as bars, `channels.ts` the subagents' beside them, and `board.ts` the two together; `names.ts` and `trail.ts` draw the names over and beside them, and `doctor.ts` `/viz doctor`'s swatches.
+  - What they're made of: `sources.ts`, the instruments; `color.ts`, the themes and backgrounds; `cells.ts`, Raster cells; `math.ts`, fades, waves and noise.
 - `hooks/viz.ts`: the plugin's decisions: your saved settings, what each `/viz` command does, when the band shows, how fast the frames run. Also pure.
-- `hooks/register.tsx`: the hooks. They read what Claude Code tells them, ask the two modules above, and do what they say.
+- `hooks/stage.ts`: what the hooks share: the music, the drawings the frames repaint, and your settings. It paints each frame and says how fast the next should come.
+- `hooks/music.ts`: the hooks that play the music as Claude works. None of them use `$`.
+- `hooks/register.tsx`: the hooks that use `$`: the session's start and the frames it runs, the context meter, Claude Code's settings, the drawings and `/viz`. They read what Claude Code tells them, ask the modules above, and do what they say. `claude plugin validate` follows `$` only into functions in the same file, and reads a `$.state` atom only in the file that declares it, so these stay together.
 - `types/index.d.ts`: the plugin's state contract.
-- `tests/`: `viz.test.ts` tests the decisions on their own; `visualizer.test.tsx` tests the engine, and the hooks through Claude Code's test harness.
+- `tests/`: a file for each topic (`music`, `thinking`, `waiting`, `subagents`, and so on), testing the engine, and the hooks through Claude Code's test harness; `viz.test.ts` tests the decisions on their own, and `support.tsx` holds the helpers the tests share.
 
 Claude Code generates the API typings in `.claude-plugin/types/` when it loads the plugin (they're git-ignored). After that, `tsc -p .` type-checks the plugin.
 
