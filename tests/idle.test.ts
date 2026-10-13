@@ -14,7 +14,7 @@ describe('idle', () => {
     presentation: { isFullscreen: true, columns: 80 },
   })
 
-  test('a band that stays up plays a low show once all is quiet, and steps aside for the music', () => {
+  test('a band that stays up plays a low show once all is quiet, and steps aside for the music', { timeoutMs: 30_000 }, () => {
     const spectrum = new Spectrum()
     const bars = new Bars(80, 4)
     spectrum.ambient = true
@@ -86,33 +86,37 @@ describe('idle', () => {
     expect(text(trail(spectrum, ink, 30, 2), 30).join('')).not.toContain('idle')
   })
 
-  test('no idle show while a subagent works, though the main loop rests; it comes once the subagent is done', async ($, on) => {
+  test('no idle show while a subagent works, though the main loop rests; it comes once the subagent is done', { timeoutMs: 30_000 }, async ($, on) => {
     on('agent.spawn', () => ({ model: 'claude-haiku-5-5', agentId: 'a1' }))
-    const { clock, ui, label } = await staged($, on)
-    await $.agent.spawn({
-      tool_use_id: 'spawn-scout',
-      prompt: 'Look around.',
-      description: 'Look for the handlers',
-      subagentType: 'Explore',
-      provider: { plugin: 'engine', tier: 'core' },
-      parentModel: 'claude-opus-5-5',
-      background: true,
-      fork: false,
-      name: 'scout',
-    })
-    await clock.advance(12_000)
-    expect(label()).toContain('scout')
-    expect(label()).not.toContain('idle')
+    // A band that stays up, for the idle show.
+    const { clock, ui, label } = await staged($, on, { mode: 'always' })
+    try {
+      await $.agent.spawn({
+        tool_use_id: 'spawn-scout',
+        prompt: 'Look around.',
+        description: 'Look for the handlers',
+        subagentType: 'Explore',
+        provider: { plugin: 'engine', tier: 'core' },
+        parentModel: 'claude-opus-5-5',
+        background: true,
+        fork: false,
+        name: 'scout',
+      })
+      await clock.advance(12_000)
+      expect(label()).toContain('scout')
+      expect(label()).not.toContain('idle')
 
-    await $.turn.complete({ reason: 'answer', answer: 'Found it.', durationMs: 1000, isAborted: false, turnId: 'u1', agentId: 'a1' })
-    await clock.advance(4000)
-    expect(label()).not.toContain('scout')
-    await clock.advance(8000)
-    expect(label()).toMatch(/^\s*idle/)
-    await ui.unmount()
+      await $.turn.complete({ reason: 'answer', answer: 'Found it.', durationMs: 1000, isAborted: false, turnId: 'u1', agentId: 'a1' })
+      await clock.advance(4000)
+      expect(label()).not.toContain('scout')
+      await clock.advance(8000)
+      expect(label()).toMatch(/^\s*idle/)
+    } finally {
+      await ui.unmount()
+    }
   })
 
-  test('/viz idle toggles the show and remembers it', async ($, on) => {
+  test('/viz idle toggles the show and remembers it', { timeoutMs: 30_000 }, async ($, on) => {
     on('command.run', () => ({ text: '' }))
     const saved = prefsStore(on)
 

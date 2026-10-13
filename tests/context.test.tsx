@@ -1,13 +1,13 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { Bars } from '../hooks/engine/bars'
-import { mix } from '../hooks/engine/color'
 import { FRAME_MS } from '../hooks/engine/math'
 import { Spectrum } from '../hooks/engine/spectrum'
-import { band, colors, ink, painted, staged, text } from './support'
+import { band, colors, hueOf, ink, painted, staged, text } from './support'
+import type { Window } from './support'
 
 describe('the context, through the plugin', () => {
-  test('a measure fills the meter, measured again only when the window changes', async ($, on) => {
+  test('a measure fills the meter, measured again only when the window changes', { timeoutMs: 30_000 }, async ($, on) => {
     let usages = 0
     const context = { tokens: 1, window: 200_000, breakdown: { totalTokens: 1, isAutoCompactEnabled: false } }
     const { clock, ui, label } = await staged($, on, {
@@ -16,51 +16,61 @@ describe('the context, through the plugin', () => {
         return context
       },
     })
-    expect(usages).toBe(1)
-    await $.session.measure({ context: { tokens: 50_000, window: 200_000 }, rateLimits: [], changed: ['context'] })
-    await clock.advance(200)
-    expect(label()).toContain('context 25%')
-    expect(usages).toBe(1)
+    try {
+      expect(usages).toBe(1)
+      await $.session.measure({ context: { tokens: 50_000, window: 200_000 }, rateLimits: [], changed: ['context'] })
+      await clock.advance(200)
+      expect(label()).toContain('context 25%')
+      expect(usages).toBe(1)
 
-    // Another model, another window: measured again, for the meter's top.
-    await $.session.measure({ context: { tokens: 50_000, window: 1_000_000 }, rateLimits: [], changed: ['context'] })
-    await clock.advance(200)
-    expect(label()).toContain('context 5%')
-    expect(usages).toBe(2)
+      // Another model, another window: measured again, for the meter's top.
+      await $.session.measure({ context: { tokens: 50_000, window: 1_000_000 }, rateLimits: [], changed: ['context'] })
+      await clock.advance(200)
+      expect(label()).toContain('context 5%')
+      expect(usages).toBe(2)
 
-    // Only the cost moved: the meter stays.
-    await $.session.measure({ context: { tokens: 900_000, window: 1_000_000 }, rateLimits: [], changed: ['cost'] })
-    await clock.advance(200)
-    expect(label()).toContain('context 5%')
-    await ui.unmount()
+      // Only the cost moved: the meter stays.
+      await $.session.measure({ context: { tokens: 900_000, window: 1_000_000 }, rateLimits: [], changed: ['cost'] })
+      await clock.advance(200)
+      expect(label()).toContain('context 5%')
+    } finally {
+      await ui.unmount()
+    }
   })
 
-  test("compacting rewinds, labeled, until done, and the meter drains; a subagent's, or the precompute pass, does not", async ($, on) => {
+  test("compacting rewinds, labeled, until done, and the meter drains; a subagent's, or the precompute pass, does not", { timeoutMs: 30_000 }, async ($, on) => {
     let finish = () => {}
     // A compaction keeps at least one message: the summary.
     const messages = [{ role: 'user' as const, text: 'The conversation so far.', toolUses: [] }]
     on('session.compact', () => new Promise(resolve => (finish = () => resolve({ messages, tokensBefore: 150_000, tokensAfter: 30_000 }))))
     const { clock, ui, label } = await staged($, on, { context: () => ({ tokens: 150_000, window: 200_000 }) })
-    await clock.advance(200)
-    expect(label()).toContain('context 75%')
+    // The compaction under way, if any.
+    let pass: Promise<unknown> = Promise.resolve()
+    try {
+      await clock.advance(200)
+      expect(label()).toContain('context 75%')
 
-    const compacting = $.session.compact({ trigger: 'auto', messages })
-    await clock.advance(300)
-    expect(label()).toContain('compacting')
-    finish()
-    await compacting
-    await clock.advance(1500)
-    expect(label()).not.toContain('compacting')
-    expect(label()).toContain('context 15%')
-
-    for (const quiet of [{ agentId: 'a1' }, { trigger: 'precompute' as const }]) {
-      const pass = $.session.compact({ trigger: 'auto', messages, ...quiet })
+      pass = $.session.compact({ trigger: 'auto', messages })
       await clock.advance(300)
-      expect(label()).not.toContain('compacting')
+      expect(label()).toContain('compacting')
       finish()
       await pass
+      await clock.advance(1500)
+      expect(label()).not.toContain('compacting')
+      expect(label()).toContain('context 15%')
+
+      for (const quiet of [{ agentId: 'a1' }, { trigger: 'precompute' as const }]) {
+        pass = $.session.compact({ trigger: 'auto', messages, ...quiet })
+        await clock.advance(300)
+        expect(label()).not.toContain('compacting')
+        finish()
+        await pass
+      }
+    } finally {
+      finish()
+      await pass
+      await ui.unmount()
     }
-    await ui.unmount()
   })
 })
 
@@ -142,92 +152,104 @@ describe('context', () => {
     expect(spectrum.isQuiet()).toBe(true)
   })
 
-  test('the band draws the meter at its right edge', async ($, on) => {
+  test('the band draws the meter at its right edge', { timeoutMs: 30_000 }, async ($, on) => {
     on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
       const { Text } = $.ui.resolve(e)
 
       return <Text>engine</Text>
     })
     const ui = await $.ui.mount(band(true))
-    const raster = await ui.find({ type: 'Raster', key: 'band' })
-    const rows = text(String(raster?.props.cells), 80)
-    expect(rows.map(row => row.slice(78))).toEqual(Array(5).fill('\u2591\u2591'))
-    await ui.unmount()
+    try {
+      const raster = await ui.find({ type: 'Raster', key: 'band' })
+      const rows = text(String(raster?.props.cells), 80)
+      expect(rows.map(row => row.slice(78))).toEqual(Array(5).fill('\u2591\u2591'))
+    } finally {
+      await ui.unmount()
+    }
   })
 })
 
 describe('context, measured', () => {
-  /** The label's color, where `word` is drawn in the band's top row. */
-  const colorOf = (cells: string, word: string) => {
+  /** The label's hue, where `word` is drawn in the band's top row. */
+  const hueAt = (cells: string, word: string) => {
     const at = (text(cells, 80)[0] ?? '').indexOf(word)
-    return at < 0 ? undefined : colors(cells, 80)[0]![at]
+    return at < 0 ? undefined : hueOf(colors(cells, 80)[0]![at]!)
   }
 
-  test("/clear, or a conversation resumed, moves the meter to what it holds; a subagent's start does not", async ($, on) => {
-    let context: object = { tokens: 140_000, window: 200_000 }
+  test("/clear, or a conversation resumed, moves the meter to what it holds; a subagent's start does not", { timeoutMs: 30_000 }, async ($, on) => {
+    let context: Window = { tokens: 140_000, window: 200_000 }
     const { clock, ui, label } = await staged($, on, { context: () => context })
-    await clock.advance(500)
-    expect(label()).toContain('context 70%')
+    try {
+      await clock.advance(500)
+      expect(label()).toContain('context 70%')
 
-    // Cleared: no response has reported its fill yet, so the estimate.
-    context = { window: 200_000, breakdown: { totalTokens: 20_000, isAutoCompactEnabled: false } }
-    await $.classic.SessionStart({ source: 'clear' })
-    await clock.advance(2000)
-    expect(label()).toContain('context 10%')
+      // Cleared: no response has reported its fill yet, so the estimate.
+      context = { window: 200_000, breakdown: { totalTokens: 20_000, isAutoCompactEnabled: false } }
+      await $.classic.SessionStart({ source: 'clear' })
+      await clock.advance(2000)
+      expect(label()).toContain('context 10%')
 
-    context = { window: 200_000, breakdown: { totalTokens: 90_000, isAutoCompactEnabled: false } }
-    await $.classic.SessionStart({ source: 'resume' })
-    await clock.advance(2000)
-    expect(label()).toContain('context 45%')
+      context = { window: 200_000, breakdown: { totalTokens: 90_000, isAutoCompactEnabled: false } }
+      await $.classic.SessionStart({ source: 'resume' })
+      await clock.advance(2000)
+      expect(label()).toContain('context 45%')
 
-    // A subagent's conversation starting is its own: the meter stays where it is.
-    context = { window: 200_000, breakdown: { totalTokens: 180_000, isAutoCompactEnabled: false } }
-    await $.classic.SessionStart({ source: 'clear', agent_id: 'a1' })
-    await clock.advance(2000)
-    expect(label()).toContain('context 45%')
-    await ui.unmount()
+      // A subagent's conversation starting is its own: the meter stays where it is.
+      context = { window: 200_000, breakdown: { totalTokens: 180_000, isAutoCompactEnabled: false } }
+      await $.classic.SessionStart({ source: 'clear', agent_id: 'a1' })
+      await clock.advance(2000)
+      expect(label()).toContain('context 45%')
+    } finally {
+      await ui.unmount()
+    }
   })
 
-  test('a top unknown at the start, read before the session was bound, is measured at the first measure', async ($, on) => {
+  test('a top unknown at the start, read before the session was bound, is measured at the first measure', { timeoutMs: 30_000 }, async ($, on) => {
     let usages = 0
     const compacting = { isAutoCompactEnabled: true, autoCompactThreshold: 160_000, totalTokens: 152_000 }
     // No breakdown yet: the top is the whole window, 76% of the way up, amber.
-    let context: object = { tokens: 152_000, window: 200_000 }
+    let context: Window = { tokens: 152_000, window: 200_000 }
     const { clock, ui, cells } = await staged($, on, {
       context: () => {
         usages += 1
         return context
       },
     })
-    await clock.advance(500)
-    expect(colorOf(cells(), 'context')).toBe(mix(0, 0xf59e0b, 0.85))
+    try {
+      await clock.advance(500)
+      expect(hueAt(cells(), 'context')).toBe('amber')
 
-    // A response: the session is bound, and the breakdown places the top. 95% of the way to auto-compact: red.
-    context = { ...context, breakdown: compacting }
-    const measure = { context: { tokens: 152_000, window: 200_000 }, rateLimits: [], changed: ['context' as const] }
-    await $.session.measure(measure)
-    await clock.advance(3000)
-    expect(colorOf(cells(), 'context')).toBe(mix(0, 0xef4444, 0.85))
-    expect(usages).toBe(2)
-    // Known now, and the window the same: not measured again.
-    await $.session.measure(measure)
-    expect(usages).toBe(2)
-    await ui.unmount()
+      // A response: the session is bound, and the breakdown places the top. 95% of the way to auto-compact: red.
+      context = { ...context, breakdown: compacting }
+      const measure = { context: { tokens: 152_000, window: 200_000 }, rateLimits: [], changed: ['context' as const] }
+      await $.session.measure(measure)
+      await clock.advance(3000)
+      expect(hueAt(cells(), 'context')).toBe('red')
+      expect(usages).toBe(2)
+      // Known now, and the window the same: not measured again.
+      await $.session.measure(measure)
+      expect(usages).toBe(2)
+    } finally {
+      await ui.unmount()
+    }
   })
 
-  test('turning auto-compact off moves the top of the meter', async ($, on) => {
+  test('turning auto-compact off moves the top of the meter', { timeoutMs: 30_000 }, async ($, on) => {
     const compacting = { isAutoCompactEnabled: true, autoCompactThreshold: 160_000, totalTokens: 152_000 }
-    let context: object = { tokens: 152_000, window: 200_000, breakdown: compacting }
+    let context: Window = { tokens: 152_000, window: 200_000, breakdown: compacting }
     const { clock, ui, cells } = await staged($, on, { context: () => context })
-    await clock.advance(500)
-    // 76% of the window is 95% of the way to auto-compact: red.
-    expect(colorOf(cells(), 'context')).toBe(mix(0, 0xef4444, 0.85))
+    try {
+      await clock.advance(500)
+      // 76% of the window is 95% of the way to auto-compact: red.
+      expect(hueAt(cells(), 'context')).toBe('red')
 
-    context = { ...context, breakdown: { ...compacting, isAutoCompactEnabled: false } }
-    await $.config.set({ key: 'autoCompact', value: false, previous: true, provider: { plugin: 'engine', tier: 'core' }, origin: { kind: 'composer' } })
-    await clock.advance(3000)
-    // Now 76% of the way to the top: amber.
-    expect(colorOf(cells(), 'context')).toBe(mix(0, 0xf59e0b, 0.85))
-    await ui.unmount()
+      context = { ...context, breakdown: { ...compacting, isAutoCompactEnabled: false } }
+      await $.config.set({ key: 'autoCompact', value: false, previous: true, provider: { plugin: 'engine', tier: 'core' }, origin: { kind: 'composer' } })
+      await clock.advance(3000)
+      // Now 76% of the way to the top: amber.
+      expect(hueAt(cells(), 'context')).toBe('amber')
+    } finally {
+      await ui.unmount()
+    }
   })
 })

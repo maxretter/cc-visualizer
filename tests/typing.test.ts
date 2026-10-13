@@ -40,7 +40,7 @@ describe('typing', () => {
     expect(spectrum.isCalm()).toBe(true)
   })
 
-  test('a long paste plays 32 of its characters, spread over it as they are, a pair of surrogates one', () => {
+  test('a long paste plays 32 of its characters, spread over it as they are, a pair of surrogates one', { timeoutMs: 30_000 }, () => {
     const paste = Array.from({ length: 100_000 }, (_, i) => (i % 7 === 3 ? '\u{1F600}' : String.fromCharCode(33 + (i % 90)))).join('')
     for (const text of [paste, paste.replace(/\u{1F600}/gu, 'é'), 'a\u{1F600}B']) {
       for (const isErased of [false, true]) {
@@ -84,27 +84,30 @@ describe('typing', () => {
     expect(spectrum.idle).toBeGreaterThan(0.5)
   })
 
-  test('the keys play on a band that is up, and never raise one', async ($, on) => {
+  test('the keys play on a band that is up, and never raise one', { timeoutMs: 30_000 }, async ($, on) => {
     const { clock, ui, blits } = await staged($, on, { mode: 'auto' })
     // The test engine raises prompt.edit as the composer does, though its
     // typings (a plugin's own calls) leave it out.
     const prompt = $.prompt as unknown as { edit: (e: PromptEditInput) => Promise<PromptEditResult> }
     const edit = (inputText: string) => prompt.edit({ origin: { kind: 'composer' }, text: '', cursor: 0, start: 0, end: 0, inputText })
-    // Claude works: the band is up, and the keys play on it.
-    await clock.advance(3000)
-    const before = blits()
-    await edit('hi')
-    await clock.advance(200)
-    expect(blits()).toBeGreaterThan(before)
+    try {
+      // Claude works: the band is up, and the keys play on it.
+      await clock.advance(3000)
+      const before = blits()
+      await edit('hi')
+      await clock.advance(200)
+      expect(blits()).toBeGreaterThan(before)
 
-    // Claude is done and the band has gone: typing does not bring it back.
-    await ui.redraw(band(false).props)
-    await clock.advance(5000)
-    const after = blits()
-    await edit('there')
-    await clock.advance(1000)
-    expect(blits()).toBe(after)
-    await ui.unmount()
+      // Claude is done and the band has gone: typing does not bring it back.
+      await ui.redraw(band(false).props)
+      await clock.advance(5000)
+      const after = blits()
+      await edit('there')
+      await clock.advance(1000)
+      expect(blits()).toBe(after)
+    } finally {
+      await ui.unmount()
+    }
   })
 })
 

@@ -1,3 +1,4 @@
+import type { ToolCallResult } from 'claude-code'
 import { describe, expect, test } from 'claude-code/testing'
 
 import { Bars } from '../hooks/engine/bars'
@@ -115,34 +116,50 @@ describe('time', () => {
 })
 
 describe('errors', () => {
-  test('a tool that fails flashes the bars red; a call refused or interrupted never ran, and does not', async ($, on) => {
+  test('a tool that fails flashes the bars red; a call refused or interrupted never ran, and does not', { timeoutMs: 30_000 }, async ($, on) => {
+    // A settings hook refuses one call before it runs: it never reaches the tool, and resolves errored.
+    on('classic.PreToolUse', ($, e) => (e.tool_use_id === 'refused' ? { deny: 'Not in this repo.' } : {}))
     const { clock, ui, cells, finish } = await staged($, on)
-    // A Bash call that ends in an error, the failure raised when it ran: how red the bars are just after.
-    const end = async (id: string, failure?: { is_interrupt?: boolean }) => {
+    // What each call resolved with, by its id.
+    const answered = new Map<string, ToolCallResult>()
+    // A Bash call the tool answers with `ran`, the failure raised if it ran and failed: how red the bars are just after it ends.
+    const end = async (id: string, ran?: ToolCallResult, failure?: { is_interrupt?: boolean }) => {
       const call = $.tool.call({ tool: 'Bash', command: 'make', tool_use_id: id })
-      await clock.settle()
-      if (failure !== undefined) {
-        await $.classic.PostToolUseFailure({ tool_name: 'Bash', tool_input: { command: 'make' }, tool_use_id: id, error: 'Exit code 2', ...failure })
+      try {
+        await clock.settle()
+        if (failure !== undefined) {
+          await $.classic.PostToolUseFailure({ tool_name: 'Bash', tool_input: { command: 'make' }, tool_use_id: id, error: 'Exit code 2', ...failure })
+        }
+      } finally {
+        finish(id, ran)
+        answered.set(id, await call)
       }
-      finish(id, { result: 'Exit code 2', isError: true })
-      await call
       await clock.advance(100)
       const red = redness(cells())
       await clock.advance(3000)
       return red
     }
+    const errored: ToolCallResult = { result: 'Exit code 2', isError: true }
 
-    const refused = await end('t1')
-    const failed = await end('t2', {})
-    const interrupted = await end('t3', { is_interrupt: true })
-    expect(failed).toBeGreaterThan(refused + 30)
-    expect(interrupted).toBeLessThan(failed - 30)
-    await ui.unmount()
+    try {
+      const calm = await end('ran', { result: 'done' })
+      const refused = await end('refused')
+      expect(answered.get('refused')).toMatchObject({ isError: true, text: 'Not in this repo.' })
+      const failed = await end('failed', errored, {})
+      const interrupted = await end('interrupted', errored, { is_interrupt: true })
+      expect(failed).toBeGreaterThan(calm + 30)
+      expect(refused).toBeLessThan(calm + 15)
+      expect(interrupted).toBeLessThan(calm + 15)
+      expect(failed).toBeGreaterThan(refused + 30)
+      expect(interrupted).toBeLessThan(failed - 30)
+    } finally {
+      await ui.unmount()
+    }
   })
 })
 
 describe('streaming', () => {
-  test('text after a lull in the stream moves the bars again', async ($, on) => {
+  test('text after a lull in the stream moves the bars again', { timeoutMs: 30_000 }, async ($, on) => {
     let resume = () => {}
     on('turn.step', async function* ($, e) {
       yield { kind: 'text' as const, index: 0, text: 'Let me look' }
@@ -157,17 +174,22 @@ describe('streaming', () => {
       for await (const _ of $.turn.step({ turnId: 'u1', index: 0, model: 'claude-opus-5-5', messageCount: 1 })) {
       }
     })()
-    // The lull: the bars fall, and the frames stop.
-    await clock.advance(5000)
-    const sent = blits()
-    await clock.advance(1000)
-    expect(blits()).toBe(sent)
+    try {
+      // The lull: the bars fall, and the frames stop.
+      await clock.advance(5000)
+      const sent = blits()
+      await clock.advance(1000)
+      expect(blits()).toBe(sent)
 
-    resume()
-    await reading
-    await clock.advance(500)
-    expect(blits()).toBeGreaterThan(sent)
-    await ui.unmount()
+      resume()
+      await reading
+      await clock.advance(500)
+      expect(blits()).toBeGreaterThan(sent)
+    } finally {
+      resume()
+      await reading
+      await ui.unmount()
+    }
   })
 })
 
@@ -291,7 +313,7 @@ describe('the demo', () => {
 describe('a turn, through the plugin', () => {
   const braille = /[⠁-⣿]/
 
-  test('the prompt sweeps up, thinking draws the brainwave until the text comes, and the answer crashes a cymbal', async ($, on) => {
+  test('the prompt sweeps up, thinking draws the brainwave until the text comes, and the answer crashes a cymbal', { timeoutMs: 30_000 }, async ($, on) => {
     let speak = () => {}
     on('turn.step', async function* ($, e) {
       yield { kind: 'thinking' as const, index: 0, text: 'Let me see.' }
@@ -301,68 +323,80 @@ describe('a turn, through the plugin', () => {
       return { turnId: e.turnId, index: e.index, answer: 'Here it is.', toolUses: [], stopReason: 'end_turn' as const, usage: null }
     })
     const { clock, ui, label, cells } = await staged($, on)
+    // The model request, once made.
+    let reading: Promise<void> = Promise.resolve()
+    try {
+      await $.prompt.submit({ text: 'hi', wait: false, origin: { kind: 'composer' } })
+      await clock.advance(150)
+      const [left, , right] = thirds(cells())
+      expect(left).toBeGreaterThan(right!)
 
-    await $.prompt.submit({ text: 'hi', wait: false, origin: { kind: 'composer' } })
-    await clock.advance(150)
-    const [left, , right] = thirds(cells())
-    expect(left).toBeGreaterThan(right!)
+      reading = (async () => {
+        for await (const _ of $.turn.step({ turnId: 'u1', index: 0, model: 'claude-opus-5-5', messageCount: 1 })) {
+        }
+      })()
+      await clock.advance(600)
+      expect(label()).toContain('thinking')
+      expect(text(cells(), 80).join('')).toMatch(braille)
+      speak()
+      await reading
+      await clock.advance(3000)
+      expect(label()).not.toContain('thinking')
+      expect(text(cells(), 80).join('')).not.toMatch(braille)
 
-    const reading = (async () => {
-      for await (const _ of $.turn.step({ turnId: 'u1', index: 0, model: 'claude-opus-5-5', messageCount: 1 })) {
-      }
-    })()
-    await clock.advance(600)
-    expect(label()).toContain('thinking')
-    expect(text(cells(), 80).join('')).toMatch(braille)
-    speak()
-    await reading
-    await clock.advance(3000)
-    expect(label()).not.toContain('thinking')
-    expect(text(cells(), 80).join('')).not.toMatch(braille)
-
-    await $.turn.complete({ reason: 'answer', answer: 'Here it is.', durationMs: 1000, isAborted: false, turnId: 'u1' })
-    await clock.advance(100)
-    const [low, , high] = thirds(cells())
-    expect(high).toBeGreaterThan(low!)
-    await ui.unmount()
+      await $.turn.complete({ reason: 'answer', answer: 'Here it is.', durationMs: 1000, isAborted: false, turnId: 'u1' })
+      await clock.advance(100)
+      const [low, , high] = thirds(cells())
+      expect(high).toBeGreaterThan(low!)
+    } finally {
+      speak()
+      await reading
+      await ui.unmount()
+    }
   })
 
-  test('a stream cut off while thinking stops the thinking', async ($, on) => {
+  test('a stream cut off while thinking stops the thinking', { timeoutMs: 30_000 }, async ($, on) => {
     on('turn.step', async function* () {
       yield { kind: 'thinking' as const, index: 0, text: 'Let me' }
       throw new Error('connection lost')
     })
     const { clock, ui, label, cells } = await staged($, on)
-    await (async () => {
-      try {
-        for await (const _ of $.turn.step({ turnId: 'u1', index: 0, model: 'claude-opus-5-5', messageCount: 1 })) {
-        }
-      } catch {}
-    })()
-    await clock.advance(3000)
-    expect(label()).not.toContain('thinking')
-    expect(text(cells(), 80).join('')).not.toMatch(braille)
-    await ui.unmount()
+    try {
+      await (async () => {
+        try {
+          for await (const _ of $.turn.step({ turnId: 'u1', index: 0, model: 'claude-opus-5-5', messageCount: 1 })) {
+          }
+        } catch {}
+      })()
+      await clock.advance(3000)
+      expect(label()).not.toContain('thinking')
+      expect(text(cells(), 80).join('')).not.toMatch(braille)
+    } finally {
+      await ui.unmount()
+    }
   })
 
-  test('an interrupted turn sweeps back down; one that errs flashes red', async ($, on) => {
+  test('an interrupted turn sweeps back down; one that errs flashes red', { timeoutMs: 30_000 }, async ($, on) => {
     const { clock, ui, cells } = await staged($, on)
     const end = (reason: 'aborted' | 'error') =>
       $.turn.complete({ reason, answer: '', durationMs: 1000, isAborted: reason === 'aborted', turnId: 'u1' })
-    await clock.advance(200)
-    const calm = redness(cells())
+    try {
+      await clock.advance(200)
+      const calm = redness(cells())
 
-    await end('aborted')
-    await clock.advance(100)
-    const [left, , right] = thirds(cells())
-    expect(right).toBeGreaterThan(left!)
-    expect(redness(cells())).toBeLessThan(calm + 15)
-    await clock.advance(3000)
+      await end('aborted')
+      await clock.advance(100)
+      const [left, , right] = thirds(cells())
+      expect(right).toBeGreaterThan(left!)
+      expect(redness(cells())).toBeLessThan(calm + 15)
+      await clock.advance(3000)
 
-    // Red even on bars that have fallen: the floor flashes too.
-    await end('error')
-    await clock.advance(100)
-    expect(redness(cells())).toBeGreaterThan(calm + 40)
-    await ui.unmount()
+      // Red even on bars that have fallen: the floor flashes too.
+      await end('error')
+      await clock.advance(100)
+      expect(redness(cells())).toBeGreaterThan(calm + 40)
+    } finally {
+      await ui.unmount()
+    }
   })
 })

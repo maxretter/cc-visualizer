@@ -8,7 +8,7 @@ import type { Ensemble, Voice } from './ensemble'
 const DEMO_TOOLS = ['Grep', 'Read', 'Read', 'Edit', 'Bash', 'WebFetch', 'Agent', 'Write']
 
 /** How long the demo plays, and how long it thinks before the drums come in. */
-const DEMO = 11_400
+export const DEMO = 11_400
 const DEMO_THINK = 2_500
 /** The demo's drum machine: a sixteenth note (113 bpm), and how long each tool it calls runs. */
 const SIXTEENTH = 132
