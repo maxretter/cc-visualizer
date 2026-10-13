@@ -5,7 +5,7 @@ import type { VizTheme } from '../../types'
 import { SOURCES } from './sources'
 import { CUE, GROUND, instrumentColor, LEGEND_GRAY, legible, luminance, mix, paletteOf } from './color'
 import type { Tone } from './color'
-import { base64, blank, DEFAULT, FULL, SPACE, write } from './cells'
+import { blank, DEFAULT, FULL, pack, SPACE, write } from './cells'
 
 /** The checks `/viz doctor` draws, a row each. */
 export const DOCTOR_ROWS = ['ramp', 'colors', 'ground', 'fade', 'glyphs'] as const
@@ -44,5 +44,5 @@ export function swatches(theme: VizTheme, tone: Tone, columns: number): string {
   write(words, columns, 2, 1, 'your terminal', gray)
   write(words, columns, 2, half + 1, 'what is expected', gray)
   write(words, columns, 4, 0, '▁▂▃▄▅▆▇█ ▔─▁ ⣿⡇⠿⠛⣀⠉ ░░ ⠋⠙⠹⠸⠼⠴ ×·', gray)
-  return base64(new Uint8Array(words.buffer))
+  return pack(words)
 }

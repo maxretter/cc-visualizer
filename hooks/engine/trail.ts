@@ -4,7 +4,7 @@
 import type { VizTheme } from '../../types'
 import { GROUND, LEGEND_GRAY, legible, mix } from './color'
 import type { Tone } from './color'
-import { base64, blank, SPIN, SPINNER, write } from './cells'
+import { blank, pack, spinnerAt, write } from './cells'
 import type { Spectrum } from './spectrum'
 import { mainVoice } from './ensemble'
 import type { Ensemble, Voice } from './ensemble'
@@ -47,11 +47,11 @@ export function trail(spectrum: Spectrum, theme: VizTheme, columns: number, rows
     end -= text.length
     if (spin > 0) {
       const cell = (row * columns + end - 2) * 3
-      words[cell] = SPINNER[Math.floor(spectrum.now / SPIN) % SPINNER.length]!
+      words[cell] = spinnerAt(spectrum.now)
       words[cell + 1] = nameColorOf(theme, name, 1, tone)
       end -= spin
     }
     placed += 1
   }
-  return base64(new Uint8Array(words.buffer))
+  return pack(words)
 }

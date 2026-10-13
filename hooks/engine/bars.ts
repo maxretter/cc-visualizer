@@ -5,9 +5,9 @@
 import type { VizTheme } from '../../types'
 import { bump, fade, noise, random } from './math'
 import { SOURCES } from './sources'
-import { AMBER_AT, CUE, ERROR, GROUND, instrumentColor, LEGEND_GRAY, legible, mix, paletteOf, RED_AT, THEMES } from './color'
+import { CUE, ERROR, GROUND, instrumentColor, LEGEND_GRAY, legible, meterColor, mix, paletteOf, THEMES } from './color'
 import type { Tone } from './color'
-import { base64, canvas, FULL, SPACE, write } from './cells'
+import { canvas, FULL, pack, SPACE, write } from './cells'
 import type { Canvas } from './cells'
 import { SPIKE } from './spectrum'
 import type { Spectrum } from './spectrum'
@@ -21,7 +21,8 @@ const FLOOR = 0x2581
 
 const SHADE = 0x2591
 
-const METER = [0x22c55e, CUE, ERROR]
+/** The meter's color while it has room, before it turns amber. */
+const GREEN = 0x22c55e
 
 const BRAILLE = 0x2800
 /** Braille dot bits by [column][row] within a cell's 2×4 dots. */
@@ -139,6 +140,16 @@ export class Bars {
     return Math.round(this.offset + b * (this.width + this.gap) + (this.width - 1) / 2)
   }
 
+  /**
+   * Where a name `length` long starts, centered over the point `at` of the
+   * spectrum as far as it can be: not before column `free`, nor ending past
+   * column `end`. None where it does not fit.
+   */
+  private placeCentered(at: number, length: number, free: number, end: number): number | undefined {
+    const start = Math.max(free, Math.min(end - length, this.columnAt(at) - Math.floor(length / 2)))
+    return start < 0 || start + length > end ? undefined : start
+  }
+
   /** Moves the bars toward the spectrum, as far as its last step went: a fast rise, a heavy fall. */
   step(spectrum: Spectrum) {
     const { dt } = spectrum
@@ -203,7 +214,7 @@ export class Bars {
   paint(theme: VizTheme, spectrum?: Spectrum, labels = false, tone: Tone = 'dark'): string {
     const into = canvas(this.columns, this.rows)
     this.draw(into, theme, spectrum, labels, tone)
-    return base64(new Uint8Array(into.words.buffer))
+    return pack(into.words)
   }
 
   /**
@@ -270,7 +281,7 @@ export class Bars {
     for (let r = 0; r < rows; r++) {
       const fill = level - r
       const top = Math.min(level, r + 1) / rows
-      const color = legible(METER[top >= RED_AT ? 2 : top >= AMBER_AT ? 1 : 0]!, tone)
+      const color = legible(meterColor(top, GREEN), tone)
       const glyph = fill >= 1 ? FULL : fill > 0 ? EIGHTHS[Math.max(1, Math.round(fill * 8))]! : SHADE
       for (let c = 0; c < this.width; c++) {
         const x = this.columns - this.width + c
@@ -384,8 +395,8 @@ export class Bars {
       }
       if (name === undefined) continue
       const { text } = name
-      const start = Math.max(free, Math.min(end - text.length, this.columnAt(source.at) - Math.floor(text.length / 2)))
-      if (start < 0 || start + text.length > end) continue
+      const start = this.placeCentered(source.at, text.length, free, end)
+      if (start === undefined) continue
       put(start, text, nameColor(theme, source.id, name.strength, tone))
       free = start + text.length + 1
     }
@@ -395,7 +406,7 @@ export class Bars {
   legend(theme: VizTheme, tone: Tone = 'dark'): string {
     const into = canvas(this.columns, 1)
     this.drawLegend(into, theme, tone)
-    return base64(new Uint8Array(into.words.buffer))
+    return pack(into.words)
   }
 
   /** Draws the cells `legend` packs into the top row of a canvas whose cells are blank where they go. */
@@ -403,8 +414,8 @@ export class Bars {
     const shows = Math.min(this.columns, into.right - into.left)
     let free = 0
     for (const s of SOURCES) {
-      const start = Math.max(free, Math.min(this.span - s.label.length, this.columnAt(s.at) - Math.floor(s.label.length / 2)))
-      if (start < 0 || start + s.label.length > this.span) continue
+      const start = this.placeCentered(s.at, s.label.length, free, this.span)
+      if (start === undefined) continue
       for (let k = 0; k < s.label.length && start + k < shows; k++) {
         const i = (into.left + start + k) * 3
         into.words[i] = s.label.charCodeAt(k)

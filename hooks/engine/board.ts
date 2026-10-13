@@ -3,7 +3,7 @@
 
 import type { VizTheme } from '../../types'
 import type { Tone } from './color'
-import { base64, blank } from './cells'
+import { blank, pack } from './cells'
 import type { Canvas } from './cells'
 import type { Spectrum } from './spectrum'
 import { mainVoice } from './ensemble'
@@ -104,7 +104,7 @@ export class Board {
     this.bars.draw(cells, theme, stray?.spectrum ?? spectrum, labels && !isNarrowed, tone, look)
     if (labels && isNarrowed) voiceLabel(words, columns, 0, this.bars.span, mainVoice(spectrum), 1, theme, tone)
     if (width < columns) this.channels.draw(words, columns, width, theme, ensemble, tone)
-    return base64(new Uint8Array(words.buffer))
+    return pack(words)
   }
 
   /** The legend under the main bars and under a channel grown wide, as wide as they are now; nothing under the other channels. */
@@ -114,6 +114,6 @@ export class Board {
     row.right = this.bars.columns
     this.bars.drawLegend(row, theme, tone)
     this.channels.legend(row.words, this.columns, this.bars.columns, theme, tone)
-    return base64(new Uint8Array(row.words.buffer))
+    return pack(row.words)
   }
 }

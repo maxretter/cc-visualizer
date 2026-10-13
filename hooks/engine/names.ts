@@ -6,9 +6,9 @@ import type { VizTheme } from '../../types'
 import { cycle } from './math'
 import { INDEX, SOURCES } from './sources'
 import type { SourceId } from './sources'
-import { AMBER_AT, CUE, ERROR, GROUND, LEGEND_GRAY, legible, mix, paletteOf, RED_AT } from './color'
+import { CUE, ERROR, GROUND, LEGEND_GRAY, legible, meterColor, mix, paletteOf } from './color'
 import type { Tone } from './color'
-import { SPIN, SPINNER, write } from './cells'
+import { spinnerAt, write } from './cells'
 import type { Call, Spectrum } from './spectrum'
 import type { Voice } from './ensemble'
 
@@ -69,7 +69,7 @@ export const contextName = (spectrum: Spectrum): Named | undefined =>
         source: 'think',
         strength: 0.85,
         isRunning: false,
-        color: spectrum.gauge >= RED_AT ? ERROR : spectrum.gauge >= AMBER_AT ? CUE : LEGEND_GRAY,
+        color: meterColor(spectrum.gauge, LEGEND_GRAY),
       }
 
 /** The label at the left: waiting on the person, else compacting, else idle. */
@@ -173,7 +173,7 @@ export function voiceLabel(words: Uint32Array, columns: number, start: number, w
   if (spin > 0) {
     const cell = at * 3
     if (at < end) {
-      words[cell] = SPINNER[Math.floor(voice.spectrum.now / SPIN) % SPINNER.length]!
+      words[cell] = spinnerAt(voice.spectrum.now)
       words[cell + 1] = nameColorOf(theme, act, shown, tone)
     }
     at += spin

@@ -19,8 +19,6 @@ export function mix(a: number, b: number, t: number): number {
   )
 }
 
-export const hex = (c: number) => `#${c.toString(16).padStart(6, '0')}`
-
 type Palette = {
   bar: (y: number, tint: number) => number
   peak: (tint: number) => number
@@ -147,5 +145,8 @@ export const CUE = 0xf59e0b
 export const LEGEND_GRAY = 0x9ca3af
 
 /** Where the meter turns amber and red, as a share of the way to auto-compact. */
-export const AMBER_AT = 0.7
-export const RED_AT = 0.9
+const AMBER_AT = 0.7
+const RED_AT = 0.9
+
+/** The meter's color at `share` of the way to auto-compact: `below` until it turns amber, then amber, then red. */
+export const meterColor = (share: number, below: number): number => (share >= RED_AT ? ERROR : share >= AMBER_AT ? CUE : below)
