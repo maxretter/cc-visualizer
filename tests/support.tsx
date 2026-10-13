@@ -1,7 +1,7 @@
 // Helpers the tests share: reading Raster cells, a session staged with the
 // plugin in it, and the drawings the tests mount.
 
-import type { ConfigRow, On, PermissionRequestDecision, SessionUsage, ToolCallResult, UiPane } from 'claude-code'
+import type { ConfigRow, On, PermissionRequestDecision, SessionContextBreakdown, SessionContextUsage, ToolCallResult, UiPane } from 'claude-code'
 import { mock } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
@@ -60,14 +60,56 @@ export const prefsStore = (on: On, initial?: Record<string, unknown>) => {
 }
 
 /**
- * How `staged` sets the session up: the `/viz` mode, the context, the
- * environment, Claude Code's theme, whether the terminal has room for the
- * pane, whether a hook refuses to open it, and what a settings hook answers
- * a permission request with, if anything.
+ * The context window as a test gives it: the status line's figures and, of
+ * /context's breakdown, what the plugin reads. `staged` reports the rest of
+ * the breakdown as a session with nothing else in its window would.
+ */
+export type Window = Omit<SessionContextUsage, 'breakdown'> & {
+  breakdown?: Pick<SessionContextBreakdown, 'totalTokens' | 'isAutoCompactEnabled' | 'autoCompactThreshold'>
+}
+
+/** A window as `$.session.usage` reports it, its breakdown whole. */
+const usageOf = ({ breakdown, ...context }: Window): SessionContextUsage => {
+  if (breakdown === undefined) return context
+  const { window } = context
+  return {
+    ...context,
+    breakdown: {
+      categories: [],
+      maxTokens: window,
+      rawMaxTokens: window,
+      autocompactSource: 'model-default',
+      percentage: window > 0 ? Math.round((100 * breakdown.totalTokens) / window) : 0,
+      gridRows: [],
+      model: 'claude-opus-5-5',
+      memoryFiles: [],
+      mcpTools: [],
+      agents: [],
+      apiUsage: null,
+      ...breakdown,
+    },
+  }
+}
+
+/** Claude Code's theme setting, as `/config` lists it. */
+const themeRow = (value: string): ConfigRow => ({
+  key: 'theme',
+  label: 'Theme',
+  kind: 'choice',
+  value,
+  provider: { plugin: 'engine', tier: 'core' },
+  isLocked: false,
+})
+
+/**
+ * How `staged` sets the session up: the `/viz` arguments run once it starts
+ * (its `mode`), the context, the environment, Claude Code's theme, whether the
+ * terminal has room for the pane, whether a hook refuses to open it, and what
+ * a settings hook answers a permission request with, if anything.
  */
 export type Stage = {
   mode?: string
-  context?: () => object
+  context?: () => Window
   env?: Record<string, string>
   theme?: string
   hasRoom?: boolean
@@ -83,6 +125,36 @@ export const redness = (cells: string, columns = 80) => {
   return drawn.reduce((sum, c) => sum + ((c >> 16) & 0xff) - ((c >> 8) & 0xff), 0) / Math.max(1, drawn.length)
 }
 
+/**
+ * A color's hue, named as the tests tell colors apart: the amber of a wait, the
+ * red of an error, the green of a meter with room. A color with little in it
+ * (a gray, a white) is `gray`, however light or dark.
+ */
+export type Hue = 'red' | 'orange' | 'amber' | 'yellow' | 'green' | 'cyan' | 'blue' | 'violet' | 'gray'
+
+/** The hue a color reads as: by its angle on the color wheel, `gray` when it has too little color to have one. */
+export const hueOf = (color: number): Hue => {
+  const r = (color >> 16) & 0xff
+  const g = (color >> 8) & 0xff
+  const b = color & 0xff
+  const max = Math.max(r, g, b)
+  const spread = max - Math.min(r, g, b)
+  if (max === 0 || spread / max < 0.25) return 'gray'
+  const sector = max === r ? (g - b) / spread + 6 : max === g ? (b - r) / spread + 2 : (r - g) / spread + 4
+  const degrees = (sector * 60) % 360
+  const bounds: [number, Hue][] = [[15, 'red'], [30, 'orange'], [45, 'amber'], [70, 'yellow'], [165, 'green'], [200, 'cyan'], [250, 'blue'], [330, 'violet']]
+  return bounds.find(([below]) => degrees < below)?.[1] ?? 'red'
+}
+
+/** How amber a drawing's bars are, below its label row: the share of the cells drawn that are. */
+export const amberness = (cells: string, columns = 80) => {
+  const drawn = colors(cells, columns)
+    .slice(1)
+    .flat()
+    .filter(c => c !== 0)
+  return drawn.filter(c => hueOf(c) === 'amber').length / Math.max(1, drawn.length)
+}
+
 /** How many bar glyphs stand in each third of a drawing, below its label row: left, middle, right. */
 export const thirds = (cells: string, columns = 80) => {
   const rows = text(cells, columns).slice(1)
@@ -94,9 +166,15 @@ export const thirds = (cells: string, columns = 80) => {
 }
 
 /**
- * A session with the band above the prompt while Claude works, in `mode`, and
- * its frames kept: tool calls run until the test finishes them, each check
- * beneath asks, and the context, the environment and the theme are as given.
+ * A session with the band above the prompt while Claude works, and its frames
+ * kept: tool calls run until the test finishes them, each check beneath asks,
+ * and the context, the environment and the theme are as given.
+ *
+ * Unless `mode` says otherwise, `/viz always` runs as it starts; and the band
+ * is mounted for a Claude at work (`isWorking`), which it stays until a test
+ * redraws it. A band shown always plays its idle show after 8 s of quiet
+ * (`IDLE_DELAY`), unless `/viz idle off` stops it: a test that reads the
+ * label, or counts frames, over a quiet spell that long says the mode it needs.
  */
 export const staged = async ($: Engine, on: On, { mode = 'always', context, env = {}, theme, hasRoom = true, isPaneRefused = false, decision }: Stage = {}) => {
   const clock = mock.clock(on)
@@ -104,7 +182,7 @@ export const staged = async ($: Engine, on: On, { mode = 'always', context, env 
   mock.env(on, env)
   // Claude Code's theme setting, as /config lists it and changes it.
   let setting = theme
-  if (theme !== undefined) on('config.list', () => ({ value: [{ key: 'theme', value: setting }] as unknown as ConfigRow[] }))
+  if (theme !== undefined) on('config.list', () => ({ value: setting === undefined ? [] : [themeRow(setting)] }))
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('command.run', () => ({ text: '' }))
@@ -165,7 +243,7 @@ export const staged = async ($: Engine, on: On, { mode = 'always', context, env 
     cursor: e.start + e.inputText.length,
   }))
   if (context !== undefined) {
-    on('session.usage', () => ({ value: { startedAt: 0, context: context(), rateLimits: [] } as unknown as SessionUsage }))
+    on('session.usage', () => ({ value: { startedAt: 0, context: usageOf(context()), rateLimits: [] } }))
   }
 
   const viz = (args: string) =>
