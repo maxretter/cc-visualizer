@@ -82,43 +82,59 @@ export function groundText(ground: Ground, backdrop: Backdrop): string {
 
 // /viz ---------------------------------------------------------------------
 
-/** The verbs alone: a verb's own options nested in the list read as the next verb's. */
-export const HINT = '[auto|always|off|bar|mini|pos|pane|demo|idle|theme|ground|doctor|help]'
+/**
+ * The verbs /viz help lists, in order, each with its options and what it
+ * does; the first, empty, is /viz alone. `on` and `toggle` work unlisted.
+ */
+const VERBS: readonly (readonly [verb: string, options: string, does: string])[] = [
+  ['', '', 'toggle the band'],
+  ['auto', '', 'show it while Claude works (default)'],
+  ['always', '', 'keep it up, with an idle show while quiet'],
+  ['off', '', 'hide it, and close the pane'],
+  ['bar', '', 'the band across the whole width'],
+  ['mini', '', 'a small spectrum at the right edge'],
+  ['pos', '[above|below]', 'the band above the prompt (default), or below it'],
+  ['pane', '', 'a big view with a legend'],
+  ['demo', '', 'play a few bars, with two subagents, without a turn'],
+  ['idle', '[on|off]', 'the idle show (with always, or in the pane)'],
+  ['theme', '[name]', THEME_NAMES.join(', ')],
+  ['ground', '[auto|light|dark]', "your terminal's background (auto follows Claude Code's theme)"],
+  ['doctor', '', "check your terminal's colors and glyphs against what the band expects"],
+  ['help', '', 'this list'],
+]
 
-export const USAGE = [
-  '/viz                    toggle the band',
-  '/viz auto               show it while Claude works (default)',
-  '/viz always             keep it up, with an idle show while quiet',
-  '/viz off                hide it, and close the pane',
-  '/viz bar                the band across the whole width',
-  '/viz mini               a small spectrum at the right edge',
-  '/viz pos [above|below]  the band above the prompt (default), or below it',
-  '/viz pane               a big view with a legend',
-  '/viz demo               play a few bars, with two subagents, without a turn',
-  '/viz idle [on|off]      the idle show (with always, or in the pane)',
-  `/viz theme [name]       ${THEME_NAMES.join(', ')}`,
-  "/viz ground [auto|light|dark]  your terminal's background (auto follows Claude Code's theme)",
-  "/viz doctor             check your terminal's colors and glyphs against what the band expects",
-  '/viz help               this list',
-].join('\n')
+/** How wide /viz help's column of commands is: what each does starts two past it. */
+const USAGE_COLUMNS = 22
+
+/** The verbs alone: a verb's own options nested in the list read as the next verb's. */
+export const HINT = `[${VERBS.map(([verb]) => verb).filter(verb => verb !== '').join('|')}]`
+
+/** /viz help: each command, then what it does. */
+export const USAGE = VERBS.map(([verb, options, does]) => {
+  const typed = ['/viz', verb, options].filter(word => word !== '').join(' ')
+  return `${typed.padEnd(USAGE_COLUMNS)}  ${does}`
+}).join('\n')
 
 /** What /viz says when the pane cannot be placed yet, in place of its usual reply. */
 export const PANE_WAITS = 'The visualizer pane opens once the terminal is wide enough.'
 
-/** What /viz does: the prefs it leaves, its reply, and what the hooks do besides. */
-export type Outcome = {
-  prefs: Prefs
-  text: string
-  /** Open the pane, or close it: the band was asked for, which it steps aside for, or all is off. */
-  pane?: 'open' | 'close'
-  /** All is off: every drawing goes. */
-  isOff?: boolean
-  isDemo?: boolean
-  /** The doctor's report, which reads the terminal's environment first (`doctorReport`). */
-  isDoctor?: boolean
+/** What /viz does: a reply alone, the doctor's report, or the prefs set, with what the hooks do besides. */
+export type Outcome =
   /** A reply alone (help, a usage line): nothing changes, and the frames are left as they are. */
-  isReplyOnly?: boolean
-}
+  | { kind: 'reply'; text: string }
+  /** The doctor's report, which reads the terminal's environment first (`doctorReport`). */
+  | { kind: 'doctor' }
+  /** The prefs it leaves, its reply, and what the hooks do besides. */
+  | {
+      kind: 'set'
+      prefs: Prefs
+      text: string
+      /** Open the pane, or close it: the band was asked for, which it steps aside for, or all is off. */
+      pane?: 'open' | 'close'
+      /** All is off: every drawing goes. */
+      isOff?: boolean
+      isDemo?: boolean
+    }
 
 /** What /viz reads besides the prefs: whether the pane is open, and the backdrop the background is read from. */
 export type Situation = { isPaneOpen: boolean; backdrop: Backdrop }
@@ -126,15 +142,24 @@ export type Situation = { isPaneOpen: boolean; backdrop: Backdrop }
 /** Turns the band on, if it was off: a command that asks for it means to see it. */
 const on = (prefs: Prefs): Prefs => (prefs.mode === 'off' ? { ...prefs, mode: 'auto' } : prefs)
 
+/** /viz `args` as words, in any case and spaced any way: the verb, then its argument. */
+const wordsOf = (args: string) => args.trim().toLowerCase().split(/\s+/)
+
+/** The verb /viz `args` names, as `command` reads it. */
+export const verbOf = (args: string): string => wordsOf(args)[0] ?? ''
+
 /** /viz `args` with the person's prefs: what it does. */
 export function command(args: string, prefs: Prefs, situation: Situation): Outcome {
-  const [verb = '', arg = ''] = args.trim().toLowerCase().split(/\s+/)
-  const same = (text: string): Outcome => ({ prefs, text, isReplyOnly: true })
+  const verb = verbOf(args)
+  const [, arg = ''] = wordsOf(args)
+  const reply = (text: string): Outcome => ({ kind: 'reply', text })
   // Asked for the band: the pane, which it steps aside for, closes.
-  const band = (next: Prefs, text: string): Outcome => ({ prefs: next, text, pane: situation.isPaneOpen ? 'close' : undefined })
+  const band = (next: Prefs, text: string): Outcome => ({ kind: 'set', prefs: next, text, pane: situation.isPaneOpen ? 'close' : undefined })
   // The band goes off: so does the pane, and every drawing.
   const mode = (next: Prefs, text: string): Outcome =>
-    next.mode === 'off' && (prefs.mode !== 'off' || verb === 'off') ? { prefs: next, text, pane: 'close', isOff: true } : { prefs: next, text }
+    next.mode === 'off' && (prefs.mode !== 'off' || verb === 'off')
+      ? { kind: 'set', prefs: next, text, pane: 'close', isOff: true }
+      : { kind: 'set', prefs: next, text }
 
   switch (verb) {
     case '':
@@ -156,23 +181,25 @@ export function command(args: string, prefs: Prefs, situation: Situation): Outco
       return band({ ...on(prefs), size: verb }, prefs.mode === 'off' ? `Visualizer on, ${shape}.` : `Visualizer: ${shape}.`)
     }
     case 'pos': {
-      if (arg === 'top') return same('Claude Code has no spot at the top of the screen that stays put. The closest is the pane: /viz pane.')
-      if (arg !== '' && !isPlace(arg)) return same('Usage: /viz pos [above|below]')
+      if (arg === 'top') return reply('Claude Code has no spot at the top of the screen that stays put. The closest is the pane: /viz pane.')
+      if (arg !== '' && !isPlace(arg)) return reply('Usage: /viz pos [above|below]')
       const place = isPlace(arg) ? arg : prefs.place === 'above' ? 'below' : 'above'
       return band({ ...on(prefs), place }, `Visualizer ${place} the prompt.`)
     }
     case 'pane':
-      return { prefs, text: 'Visualizer pane open. Close it with ctrl+x x or /viz off.', pane: 'open' }
+      return { kind: 'set', prefs, text: 'Visualizer pane open. Close it with ctrl+x x or /viz off.', pane: 'open' }
     case 'demo':
       return {
+        kind: 'set',
         prefs: on(prefs),
         text: prefs.mode === 'off' ? 'Visualizer on, playing a demo.' : 'Playing a demo for a few seconds.',
         isDemo: true,
       }
     case 'idle': {
       const idle = arg === '' ? !prefs.idle : arg === 'on' ? true : arg === 'off' ? false : undefined
-      if (idle === undefined) return same('Usage: /viz idle [on|off]')
+      if (idle === undefined) return reply('Usage: /viz idle [on|off]')
       return {
+        kind: 'set',
         prefs: { ...prefs, idle },
         text: !idle
           ? 'Idle animation off: the bars rest flat.'
@@ -182,19 +209,19 @@ export function command(args: string, prefs: Prefs, situation: Situation): Outco
       }
     }
     case 'theme': {
-      if (arg !== '' && !isTheme(arg)) return same(`No theme "${printable(arg)}". Themes: ${THEME_NAMES.join(', ')}.`)
+      if (arg !== '' && !isTheme(arg)) return reply(`No theme "${printable(arg)}". Themes: ${THEME_NAMES.join(', ')}.`)
       const theme = isTheme(arg) ? arg : THEME_NAMES[(THEME_NAMES.indexOf(prefs.theme) + 1) % THEME_NAMES.length]!
-      return { prefs: { ...prefs, theme }, text: `Visualizer theme: ${theme}.` }
+      return { kind: 'set', prefs: { ...prefs, theme }, text: `Visualizer theme: ${theme}.` }
     }
     case 'ground': {
-      if (arg !== '' && !isGround(arg)) return same('Usage: /viz ground [auto|light|dark]')
+      if (arg !== '' && !isGround(arg)) return reply('Usage: /viz ground [auto|light|dark]')
       const ground = isGround(arg) ? arg : prefs.ground
-      return { prefs: { ...prefs, ground }, text: `Visualizer background: ${groundText(ground, situation.backdrop)}.` }
+      return { kind: 'set', prefs: { ...prefs, ground }, text: `Visualizer background: ${groundText(ground, situation.backdrop)}.` }
     }
     case 'doctor':
-      return { prefs, text: '', isDoctor: true }
+      return { kind: 'doctor' }
     default:
-      return same(USAGE)
+      return reply(USAGE)
   }
 }
 

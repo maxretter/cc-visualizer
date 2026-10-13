@@ -32,8 +32,9 @@ import {
   measuredFrom,
   percentOf,
   prefsFrom,
+  verbOf,
 } from './viz'
-import type { Measured, Prefs, View } from './viz'
+import type { Measured, Prefs, Terminal, View } from './viz'
 
 const PANE = 'viz'
 const BAND_ROWS = 5
@@ -72,6 +73,16 @@ async function measureContext($: EngineInterface): Promise<Measured> {
 /** Claude Code's theme setting, as `/config` shows it: `dark`, `light`, `auto`, or another. */
 async function themeOf($: EngineInterface): Promise<unknown> {
   return (await $.config.list().catch(() => [])).find(row => row.key === 'theme')?.value
+}
+
+/** The terminal's own say, for the doctor: its TERM, COLORTERM and TERM_PROGRAM, each unset if it cannot be read. */
+async function terminalOf($: EngineInterface): Promise<Terminal> {
+  const [term, colorterm, program] = await Promise.all([
+    $.env.get('TERM').catch(() => undefined),
+    $.env.get('COLORTERM').catch(() => undefined),
+    $.env.get('TERM_PROGRAM').catch(() => undefined),
+  ])
+  return { term, colorterm, program }
 }
 
 /** The prefs, published for the drawings, which redraw as they change: each written only if it did. */
@@ -374,7 +385,7 @@ export const register: Register = on => {
   // /viz doctor's report on the terminal: what it found, then a swatch for
   // each check beside its name, painted for the background the band paints for.
   on('ui.render', { component: 'CommandOutput', props: { command: 'viz' } }, async ($, e, next) => {
-    if (e.surface !== 'terminal' || e.props.isErrored || e.props.args.trim().toLowerCase().split(/\s+/)[0] !== 'doctor') return next(e)
+    if (e.surface !== 'terminal' || e.props.isErrored || verbOf(e.props.args) !== 'doctor') return next(e)
     const t = checked(isTheme, await read($, theme), stage.prefs.theme)
     const { Box, Text, Raster } = $.ui.resolve(e)
     // As wide as the transcript has room for beside the names, 64 at most. The
@@ -401,45 +412,43 @@ export const register: Register = on => {
   // /viz: what it does is viz.ts's to say; this does it.
   on('command.run', { command: 'viz' }, async ($, e) => {
     const outcome = command(e.args, stage.prefs, { isPaneOpen: (await read($, isPaneOpen)) === true, backdrop: stage.backdrop })
-    if (outcome.isDoctor) {
-      const [term, colorterm, program] = await Promise.all([
-        $.env.get('TERM').catch(() => undefined),
-        $.env.get('COLORTERM').catch(() => undefined),
-        $.env.get('TERM_PROGRAM').catch(() => undefined),
-      ])
-      return { text: doctorReport({ term, colorterm, program }, stage.prefs, stage.backdrop) }
-    }
-    if (outcome.isReplyOnly) return { text: outcome.text }
+    switch (outcome.kind) {
+      case 'reply':
+        return { text: outcome.text }
+      case 'doctor':
+        return { text: doctorReport(await terminalOf($), stage.prefs, stage.backdrop) }
+      case 'set': {
+        let { text } = outcome
+        if (outcome.pane === 'open') {
+          // The band steps aside once the pane is drawn, not before: an open
+          // refused, or one that waits undrawn, leaves it where it was.
+          try {
+            const opened = await $.ui.open({ id: PANE, title: 'Visualizer', rows: 14 })
+            if (!opened.isPlaced) text = PANE_WAITS
+          } finally {
+            await notePane($)
+          }
+        } else if (outcome.pane === 'close') {
+          await $.ui.close({ id: PANE })
+          if (outcome.isOff) sites.clear()
+          else sites.delete(PANE)
+          await notePane($)
+        }
+        if (outcome.isDemo) spectrum.playDemo(ensemble)
+        const before = stage.prefs
+        stage.prefs = outcome.prefs
+        await publish($, stage.prefs)
+        // Save what this command changed over what is saved: another session may
+        // have saved the rest since this one read it. What is saved is read as the
+        // prefs, so a key no pref has, or a value none takes, is not kept.
+        const changed = changes(before, stage.prefs)
+        if (Object.keys(changed).length > 0) {
+          await $.store.set('prefs', { ...prefsFrom(await $.store.get('prefs')), ...changed })
+        }
+        stage.wake()
 
-    let { text } = outcome
-    if (outcome.pane === 'open') {
-      // The band steps aside once the pane is drawn, not before: an open
-      // refused, or one that waits undrawn, leaves it where it was.
-      try {
-        const opened = await $.ui.open({ id: PANE, title: 'Visualizer', rows: 14 })
-        if (!opened.isPlaced) text = PANE_WAITS
-      } finally {
-        await notePane($)
+        return { text }
       }
-    } else if (outcome.pane === 'close') {
-      await $.ui.close({ id: PANE })
-      if (outcome.isOff) sites.clear()
-      else sites.delete(PANE)
-      await notePane($)
     }
-    if (outcome.isDemo) spectrum.playDemo(ensemble)
-    const before = stage.prefs
-    stage.prefs = outcome.prefs
-    await publish($, stage.prefs)
-    // Save what this command changed over what is saved: another session may
-    // have saved the rest since this one read it. What is saved is read as the
-    // prefs, so a key no pref has, or a value none takes, is not kept.
-    const changed = changes(before, stage.prefs)
-    if (Object.keys(changed).length > 0) {
-      await $.store.set('prefs', { ...prefsFrom(await $.store.get('prefs')), ...changed })
-    }
-    stage.wake()
-
-    return { text }
   })
 }
