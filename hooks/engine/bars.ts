@@ -2,16 +2,15 @@
 // meter at their right edge, the brainwave over them while Claude thinks, and
 // the names along their top row.
 
-import type { VizTheme } from '../../types'
 import { bump, fade, noise, random } from './math'
 import { SOURCES } from './sources'
-import { AMBER_AT, CUE, ERROR, GROUND, instrumentColor, LEGEND_GRAY, legible, mix, paletteOf, RED_AT, THEMES } from './color'
-import type { Tone } from './color'
-import { base64, canvas, FULL, SPACE, write } from './cells'
+import { instrumentColor, LEGEND_GRAY, legible, meterColor, mix } from './color'
+import type { Ink } from './color'
+import { FULL, SPACE, write } from './cells'
 import type { Canvas } from './cells'
 import { SPIKE } from './spectrum'
 import type { Spectrum } from './spectrum'
-import { callName, contextName, fit, nameColor, nameColorOf, statusName, thinkingName } from './names'
+import { callName, contextName, fit, nameColorOf, statusName, thinkingName } from './names'
 import type { Named } from './names'
 
 const EIGHTHS = [SPACE, 0x2581, 0x2582, 0x2583, 0x2584, 0x2585, 0x2586, 0x2587, FULL]
@@ -21,7 +20,8 @@ const FLOOR = 0x2581
 
 const SHADE = 0x2591
 
-const METER = [0x22c55e, CUE, ERROR]
+/** The meter's color while it has room, before it turns amber. */
+const GREEN = 0x22c55e
 
 const BRAILLE = 0x2800
 /** Braille dot bits by [column][row] within a cell's 2×4 dots. */
@@ -29,13 +29,26 @@ const DOTS = [
   [0x01, 0x02, 0x04, 0x40],
   [0x08, 0x10, 0x20, 0x80],
 ]
-const MIND = 0xa78bfa
 
 /**
  * How bars are cut from the columns: each bar's width and the gap between;
  * with `meter`, the context meter at the right edge, a bar wide.
  */
 export type Layout = { width: number; gap: number; meter?: boolean }
+
+/** Bars this wide or wider are two cells a bar, and name each tool over its band; narrower, a channel's label names who plays. */
+export const WIDE = 30
+
+/**
+ * Bars `columns` wide laid out: a cell between each bar, and each bar
+ * `width` cells (two unless said) once they are wide, one below; with
+ * `meter`, the context meter at the right edge.
+ */
+export const layoutFor = (columns: number, { width = 2, meter = false }: { width?: number; meter?: boolean } = {}): Layout => ({
+  width: columns >= WIDE ? width : 1,
+  gap: 1,
+  meter,
+})
 
 /**
  * What bars show beside the music of the spectrum they draw: the context
@@ -75,11 +88,8 @@ export class Bars {
   private readonly speed: Float64Array
   private readonly tint: Uint32Array
   private readonly rand: () => number
-  /**
-   * A theme's colors on a tone's background, worked out once each: the bars by
-   * bar and row, each bar's peak cap and floor, and the amber and red they turn.
-   */
-  private colors?: { theme: VizTheme; tone: Tone; bar: Uint32Array; peak: Uint32Array; floor: Uint32Array; cue: number; error: number }
+  /** An ink's colors for these bars, worked out once each: the bars by bar and row, and each bar's peak cap and floor. */
+  private colors?: { ink: Ink; bar: Uint32Array; peak: Uint32Array; floor: Uint32Array }
   /** The brainwave's workings, kept from frame to frame: its dots by cell, and its wave by column of dots. */
   private masks?: Uint8Array
   private waves?: Float64Array
@@ -87,7 +97,7 @@ export class Bars {
   constructor(
     readonly columns: number,
     readonly rows: number,
-    private readonly layout: Layout = { width: columns >= 30 ? 2 : 1, gap: 1 },
+    private readonly layout: Layout = layoutFor(columns),
   ) {
     this.width = layout.width
     this.gap = layout.gap
@@ -139,6 +149,16 @@ export class Bars {
     return Math.round(this.offset + b * (this.width + this.gap) + (this.width - 1) / 2)
   }
 
+  /**
+   * Where a name `length` long starts, centered over the point `at` of the
+   * spectrum as far as it can be: not before column `free`, nor ending past
+   * column `end`. None where it does not fit.
+   */
+  private placeCentered(at: number, length: number, free: number, end: number): number | undefined {
+    const start = Math.max(free, Math.min(end - length, this.columnAt(at) - Math.floor(length / 2)))
+    return start < 0 || start + length > end ? undefined : start
+  }
+
   /** Moves the bars toward the spectrum, as far as its last step went: a fast rise, a heavy fall. */
   step(spectrum: Spectrum) {
     const { dt } = spectrum
@@ -176,52 +196,36 @@ export class Bars {
     return this.height.every(h => h === 0) && this.peak.every(p => p === 0)
   }
 
-  private colorsOf(theme: VizTheme, tone: Tone) {
-    if (this.colors?.theme === theme && this.colors.tone === tone) return this.colors
+  private colorsOf(ink: Ink) {
+    if (this.colors?.ink === ink) return this.colors
     const { count, rows } = this
-    const palette = paletteOf(theme, tone)
-    const colors = {
-      theme,
-      tone,
-      bar: new Uint32Array(count * rows),
-      peak: new Uint32Array(count),
-      floor: new Uint32Array(count),
-      cue: legible(CUE, tone),
-      error: legible(ERROR, tone),
-    }
+    const colors = { ink, bar: new Uint32Array(count * rows), peak: new Uint32Array(count), floor: new Uint32Array(count) }
     for (let b = 0; b < count; b++) {
       const tint = this.tint[b]!
-      for (let r = 0; r < rows; r++) colors.bar[b * rows + r] = palette.bar(r / Math.max(1, rows - 1), tint)
-      colors.peak[b] = palette.peak(tint)
-      colors.floor[b] = palette.floor(tint)
+      for (let r = 0; r < rows; r++) colors.bar[b * rows + r] = ink.bar(r / Math.max(1, rows - 1), tint)
+      colors.peak[b] = ink.peak(tint)
+      colors.floor[b] = ink.floor(tint)
     }
     this.colors = colors
     return colors
   }
 
-  /** The bars as Raster cells, for a background of `tone`; with `labels`, each tool's name over its band. */
-  paint(theme: VizTheme, spectrum?: Spectrum, labels = false, tone: Tone = 'dark'): string {
-    const into = canvas(this.columns, this.rows)
-    this.draw(into, theme, spectrum, labels, tone)
-    return base64(new Uint8Array(into.words.buffer))
-  }
-
   /**
-   * Draws the cells `paint` packs (three words each: glyph, foreground,
-   * background) into a canvas whose cells are blank where they go. With a
-   * `look`, the meter shows another spectrum's context, and names lead the labels.
+   * Draws the bars over `spectrum` in `ink` into a canvas whose cells are
+   * blank where they go; with `labels`, each tool's name over its band. With
+   * a `look`, the meter shows another spectrum's context, and names lead the labels.
    */
-  draw(into: Canvas, theme: VizTheme, spectrum?: Spectrum, labels = false, tone: Tone = 'dark', look: Look = {}) {
+  draw(into: Canvas, ink: Ink, spectrum?: Spectrum, labels = false, look: Look = {}) {
     const { rows } = this
     const { words, columns, left: x0 } = into
     // How many of the bars' columns show, from their left.
     const shows = Math.min(this.columns, into.right - x0)
-    const colors = this.colorsOf(theme, tone)
+    const colors = this.colorsOf(ink)
     const red = (spectrum?.flash ?? 0) * 0.65
     const amber = (spectrum?.cue ?? 0) * 0.8
     // Amber while the person is waited on, red after an error, the floor too,
     // so either shows on bars that have fallen; most frames neither.
-    const shade = (color: number) => (amber === 0 && red === 0 ? color : mix(mix(color, colors.cue, amber), colors.error, red))
+    const shade = (color: number) => (amber === 0 && red === 0 ? color : mix(mix(color, ink.cue, amber), ink.error, red))
     for (let b = 0; b < this.count; b++) {
       const h = this.height[b]! * rows
       const p = this.peak[b]! * rows
@@ -251,9 +255,9 @@ export class Bars {
         }
       }
     }
-    if (this.meter && spectrum !== undefined) this.paintMeter(into, shows, look.meter ?? spectrum, tone)
-    if (spectrum !== undefined && spectrum.mind > 0) this.brainwave(into, shows, theme, spectrum, tone)
-    if (labels && spectrum !== undefined) this.label(into, shows, theme, spectrum, tone, look)
+    if (this.meter && spectrum !== undefined) this.paintMeter(into, shows, look.meter ?? spectrum, ink)
+    if (spectrum !== undefined && spectrum.mind > 0) this.brainwave(into, shows, ink, spectrum)
+    if (labels && spectrum !== undefined) this.label(into, shows, ink, spectrum, look)
   }
 
   /**
@@ -261,16 +265,16 @@ export class Bars {
    * top, green, then amber, then red, its empty cells a dim track; now and
    * then a glint runs up it. As much of it as `shows`.
    */
-  private paintMeter(into: Canvas, shows: number, spectrum: Spectrum, tone: Tone) {
+  private paintMeter(into: Canvas, shows: number, spectrum: Spectrum, ink: Ink) {
     const { rows } = this
     const { words, columns, left: x0 } = into
     const level = spectrum.gauge * rows
-    const track = mix(GROUND[tone], LEGEND_GRAY, 0.22)
+    const track = mix(ink.ground, LEGEND_GRAY, 0.22)
     const glint = spectrum.glint()
     for (let r = 0; r < rows; r++) {
       const fill = level - r
       const top = Math.min(level, r + 1) / rows
-      const color = legible(METER[top >= RED_AT ? 2 : top >= AMBER_AT ? 1 : 0]!, tone)
+      const color = legible(meterColor(top, GREEN), ink.tone)
       const glyph = fill >= 1 ? FULL : fill > 0 ? EIGHTHS[Math.max(1, Math.round(fill * 8))]! : SHADE
       for (let c = 0; c < this.width; c++) {
         const x = this.columns - this.width + c
@@ -294,7 +298,7 @@ export class Bars {
    * above the bars, never the same twice, busier as thinking text streams in,
    * each spark of thought a spike running along it, and a glow drifting on it.
    */
-  private brainwave(into: Canvas, shows: number, theme: VizTheme, spectrum: Spectrum, tone: Tone) {
+  private brainwave(into: Canvas, shows: number, ink: Ink, spectrum: Spectrum) {
     const { columns, rows } = this
     const { words, columns: stride, left: x0 } = into
     const { mind, restless, now, sparks } = spectrum
@@ -337,7 +341,6 @@ export class Bars {
       }
       previous = y
     }
-    const base = legible(theme === 'instrument' ? MIND : THEMES[theme].bar(0.8, 0), tone)
     for (let cell = 0; cell < masks.length; cell++) {
       const x = cell % columns
       if (masks[cell] === 0 || x >= shows) continue
@@ -345,7 +348,7 @@ export class Bars {
       if (words[i] !== SPACE) continue
       const pulse = 0.75 + 0.25 * noise((x / this.span) * 5 - t * 1.8, 7 + t * 0.4)
       words[i] = BRAILLE + masks[cell]!
-      words[i + 1] = mix(GROUND[tone], base, (0.3 + 0.7 * mind) * pulse)
+      words[i + 1] = mix(ink.ground, ink.mind, (0.3 + 0.7 * mind) * pulse)
     }
   }
 
@@ -354,26 +357,26 @@ export class Bars {
    * compaction, the idle), the context's fill at the right by the meter, and
    * the newest call of each tool band, its name over the band, between.
    */
-  private label(into: Canvas, shows: number, theme: VizTheme, spectrum: Spectrum, tone: Tone, look: Look) {
+  private label(into: Canvas, shows: number, ink: Ink, spectrum: Spectrum, look: Look) {
     const put = (start: number, text: string, color: number) => write(into.words, into.columns, 0, into.left + start, text, color, into.left + shows)
     let free = 0
     let end = this.span
     const context = this.meter ? contextName(look.meter ?? spectrum) : undefined
     if (context !== undefined && context.text.length < this.span) {
-      put(end - context.text.length, context.text, nameColorOf(theme, context, context.strength, tone))
+      put(end - context.text.length, context.text, nameColorOf(ink, context, context.strength))
       end -= context.text.length + 1
     }
     let at = this.offset
     for (const lead of look.lead ?? []) {
       const text = fit(lead.text, Math.max(8, Math.floor((end - this.offset) / 3)))
       if (at + text.length > end) break
-      put(at, text, nameColorOf(theme, lead, lead.strength, tone))
+      put(at, text, nameColorOf(ink, lead, lead.strength))
       at += text.length + 1
       free = at
     }
     const status = statusName(spectrum)
     if (status !== undefined && at + status.text.length <= end) {
-      put(at, status.text, nameColorOf(theme, status, status.strength, tone))
+      put(at, status.text, nameColorOf(ink, status, status.strength))
       free = at + status.text.length + 1
     }
     for (const source of SOURCES) {
@@ -384,31 +387,27 @@ export class Bars {
       }
       if (name === undefined) continue
       const { text } = name
-      const start = Math.max(free, Math.min(end - text.length, this.columnAt(source.at) - Math.floor(text.length / 2)))
-      if (start < 0 || start + text.length > end) continue
-      put(start, text, nameColor(theme, source.id, name.strength, tone))
+      const start = this.placeCentered(source.at, text.length, free, end)
+      if (start === undefined) continue
+      put(start, text, ink.name(source.id, name.strength))
       free = start + text.length + 1
     }
   }
 
-  /** One row naming the instruments under their place on the spectrum. */
-  legend(theme: VizTheme, tone: Tone = 'dark'): string {
-    const into = canvas(this.columns, 1)
-    this.drawLegend(into, theme, tone)
-    return base64(new Uint8Array(into.words.buffer))
-  }
-
-  /** Draws the cells `legend` packs into the top row of a canvas whose cells are blank where they go. */
-  drawLegend(into: Canvas, theme: VizTheme, tone: Tone = 'dark') {
+  /**
+   * Draws the legend, one row naming the instruments under their place on the
+   * spectrum, in `ink`, into the top row of a canvas whose cells are blank where they go.
+   */
+  drawLegend(into: Canvas, ink: Ink) {
     const shows = Math.min(this.columns, into.right - into.left)
     let free = 0
     for (const s of SOURCES) {
-      const start = Math.max(free, Math.min(this.span - s.label.length, this.columnAt(s.at) - Math.floor(s.label.length / 2)))
-      if (start < 0 || start + s.label.length > this.span) continue
+      const start = this.placeCentered(s.at, s.label.length, free, this.span)
+      if (start === undefined) continue
       for (let k = 0; k < s.label.length && start + k < shows; k++) {
         const i = (into.left + start + k) * 3
         into.words[i] = s.label.charCodeAt(k)
-        into.words[i + 1] = legible(theme === 'instrument' ? s.color : LEGEND_GRAY, tone)
+        into.words[i + 1] = ink.legend(s.id)
       }
       free = start + s.label.length + 1
     }

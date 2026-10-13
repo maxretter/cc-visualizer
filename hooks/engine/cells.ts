@@ -5,9 +5,12 @@ export const DEFAULT = 0x01000000
 export const SPACE = 0x20
 export const FULL = 0x2588
 
-export const SPINNER = [0x280b, 0x2819, 0x2839, 0x2838, 0x283c, 0x2834, 0x2826, 0x2827, 0x2807, 0x280f]
+const SPINNER = [0x280b, 0x2819, 0x2839, 0x2838, 0x283c, 0x2834, 0x2826, 0x2827, 0x2807, 0x280f]
 /** How long the spinner shows each of its glyphs. */
-export const SPIN = 70
+const SPIN = 70
+
+/** The spinner's glyph `now`, on the music's clock. */
+export const spinnerAt = (now: number): number => SPINNER[Math.floor(now / SPIN) % SPINNER.length]!
 
 const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
 
@@ -16,6 +19,9 @@ export function base64(bytes: Uint8Array): string {
   const native = (bytes as Uint8Array & { toBase64?: () => string }).toBase64
   return typeof native === 'function' ? native.call(bytes) : encodeBase64(bytes)
 }
+
+/** Cells as `Raster` takes them: their words' bytes, as base64. */
+export const pack = (words: Uint32Array): string => base64(new Uint8Array(words.buffer, words.byteOffset, words.byteLength))
 
 /** Standard padded base64, by hand: for a runtime without `toBase64`. */
 export function encodeBase64(bytes: Uint8Array): string {

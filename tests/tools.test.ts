@@ -4,7 +4,7 @@ import { Bars } from '../hooks/engine/bars'
 import { shortName } from '../hooks/engine/sources'
 import { Spectrum } from '../hooks/engine/spectrum'
 import { trail } from '../hooks/engine/trail'
-import { text } from './support'
+import { ink, painted, text } from './support'
 
 describe('tool names', () => {
   test('MCP tools drop their server', () => {
@@ -32,7 +32,7 @@ describe('tool names', () => {
     spectrum.endCall(spectrum.startCall('Grep'))
     spectrum.startCall('Bash')
     spectrum.step()
-    const [top, bottom] = text(trail(spectrum, 'instrument', 30, 2), 30)
+    const [top, bottom] = text(trail(spectrum, ink, 30, 2), 30)
     expect(top?.trim()).toBe('')
     expect(bottom?.trimEnd()).toMatch(/Grep \u00b7 \S Bash$/)
   })
@@ -43,9 +43,9 @@ describe('tool names', () => {
     spectrum.startCall('Edit')
     spectrum.step()
     bars.step(spectrum)
-    const [top] = text(bars.paint('instrument', spectrum, true), 80)
+    const [top] = text(painted(bars, ink, spectrum, true), 80)
     expect(top).toContain('Edit')
-    const [unlabelled] = text(bars.paint('instrument', spectrum), 80)
+    const [unlabelled] = text(painted(bars, ink, spectrum), 80)
     expect(unlabelled).not.toContain('Edit')
   })
 })

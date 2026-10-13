@@ -9,9 +9,9 @@ import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register } from 'claude-code'
 
 import type { VizMode, VizSize, VizTheme } from '../types'
-import type { Layout } from './engine/bars'
+import { layoutFor } from './engine/bars'
+import { inkOf } from './engine/color'
 import { DOCTOR_ROWS, swatches } from './engine/doctor'
-import { trail } from './engine/trail'
 import { Frames } from './frames'
 import { music } from './music'
 import { Stage } from './stage'
@@ -39,15 +39,15 @@ import type { Measured, Prefs, Terminal, View } from './viz'
 const PANE = 'viz'
 const BAND_ROWS = 5
 const PANE_ROWS = 32
+/** The rows the pane asks to open with, its legend's among them, while seated inline above the prompt; the dock ignores it. */
+const PANE_INLINE_ROWS = 14
 const MINI_COLUMNS = 32
 const MINI_ROWS = 2
-const MINI_LAYOUT: Layout = { width: 1, gap: 1, meter: true }
-/** The band's and the pane's bars, the context meter at the right edge. */
-const wide = (columns: number): Layout => ({ width: columns >= 30 ? 2 : 1, gap: 1, meter: true })
 /** The most columns the tool names beside the mini spectrum take. */
 const MINI_NAMES = 56
-/** The column of names beside the doctor's swatches. */
+/** The column of names beside the doctor's swatches, and the most columns the swatches take. */
 const DOCTOR_NAMES = 8
+const DOCTOR_COLUMNS = 64
 
 // The prefs the drawings read, published from the plugin's own copy, and what plays.
 const mode = atom({ plugin: 'visualizer', key: 'mode' } as const, DEFAULTS.mode)
@@ -266,27 +266,29 @@ export const register: Register = on => {
   // The band as either site draws it: across `bodyColumns`, or mini at its right edge.
   const band = (ui: Pick<Elements['terminal'], 'Box' | 'Raster'>, requestId: string, s: VizSize, t: VizTheme, bodyColumns: number, room: number) => {
     const { Box, Raster } = ui
-    const focus = stage.inView()
     if (s === 'mini') {
       const columns = clampInt(Math.min(MINI_COLUMNS, bodyColumns), 1, 512)
       const rows = Math.min(MINI_ROWS, room)
       const nameColumns = Math.min(MINI_NAMES, bodyColumns - columns)
       const names = nameColumns >= 8 ? { key: 'names', columns: nameColumns, rows } : undefined
-      const site = stage.mount(requestId, 'mini', columns, rows, { layout: MINI_LAYOUT, names })
+      // Its bars a cell each however wide, the context meter at their right edge.
+      const site = stage.mount(requestId, 'mini', columns, rows, { layout: layoutFor(columns, { width: 1, meter: true }), names })
+      const cells = stage.cells(site, t)
 
       return (
         <Box width={bodyColumns} justifyContent="flex-end">
-          {names && <Raster key="names" columns={names.columns} rows={rows} cells={trail(spectrum, t, names.columns, rows, stage.tone, ensemble, focus)} />}
-          <Raster key="mini" columns={columns} rows={rows} cells={site.board.paint(t, spectrum, ensemble, false, stage.tone, focus)} />
+          {names && <Raster key="names" columns={names.columns} rows={rows} cells={cells.get('names')!} />}
+          <Raster key="mini" columns={columns} rows={rows} cells={cells.get('mini')!} />
         </Box>
       )
     }
 
     const columns = clampInt(bodyColumns, 1, 512)
     const rows = Math.min(BAND_ROWS, room)
-    const site = stage.mount(requestId, 'band', columns, rows, { layout: wide(columns), labels: true })
+    // The context meter at the bars' right edge, as on the pane.
+    const site = stage.mount(requestId, 'band', columns, rows, { layout: layoutFor(columns, { meter: true }), labels: true })
 
-    return <Raster key="band" columns={columns} rows={rows} cells={site.board.paint(t, spectrum, ensemble, true, stage.tone, focus)} />
+    return <Raster key="band" columns={columns} rows={rows} cells={stage.cells(site, t).get('band')!} />
   }
 
   // Above the prompt: the band in the slot over the input. Another surface
@@ -361,12 +363,13 @@ export const register: Register = on => {
     stage.viewed = e.props.view?.agentId
     const columns = clampInt(e.props.bodyColumns, 1, 512)
     const rows = clampInt(e.props.scroll.bodyRows - 1, 2, PANE_ROWS)
-    const site = stage.mount(PANE, 'pane', columns, rows, { layout: wide(columns), labels: true, legend: 'legend' })
+    const site = stage.mount(PANE, 'pane', columns, rows, { layout: layoutFor(columns, { meter: true }), labels: true, legend: 'legend' })
+    const cells = stage.cells(site, t)
 
     return (
       <Box flexDirection="column">
-        <Raster key="pane" columns={columns} rows={rows} cells={site.board.paint(t, spectrum, ensemble, true, stage.tone, stage.inView())} />
-        <Raster key="legend" columns={columns} rows={1} cells={site.board.legend(t, stage.tone)} />
+        <Raster key="pane" columns={columns} rows={rows} cells={cells.get('pane')!} />
+        <Raster key="legend" columns={columns} rows={1} cells={cells.get('legend')!} />
       </Box>
     )
   })
@@ -389,11 +392,11 @@ export const register: Register = on => {
     if (e.surface !== 'terminal' || e.props.isErrored || verbOf(e.props.args) !== 'doctor') return next(e)
     const t = checked(isTheme, await read($, theme), stage.prefs.theme)
     const { Box, Text, Raster } = $.ui.resolve(e)
-    // As wide as the transcript has room for beside the names, 64 at most. The
-    // row is told no width of its own: the prompt's column, as the band above
-    // was told it.
+    // As wide as the transcript has room for beside the names, up to
+    // DOCTOR_COLUMNS. The row is told no width of its own: the prompt's column,
+    // as the band above was told it.
     const width = stage.promptColumns(e.viewport)
-    const columns = clampInt(width - DOCTOR_NAMES, 1, 64)
+    const columns = clampInt(width - DOCTOR_NAMES, 1, DOCTOR_COLUMNS)
 
     return (
       <Box flexDirection="column">
@@ -403,7 +406,7 @@ export const register: Register = on => {
           <Box flexDirection="column" width={DOCTOR_NAMES}>
             <Text dimColor>{DOCTOR_ROWS.join('\n')}</Text>
           </Box>
-          <Raster key="doctor" columns={columns} rows={DOCTOR_ROWS.length} cells={swatches(t, stage.tone, columns)} />
+          <Raster key="doctor" columns={columns} rows={DOCTOR_ROWS.length} cells={swatches(inkOf(t, stage.tone), columns)} />
         </Box>
         <Text dimColor>{DOCTOR_HINTS.join('\n')}</Text>
       </Box>
@@ -424,7 +427,7 @@ export const register: Register = on => {
           // The band steps aside once the pane is drawn, not before: an open
           // refused, or one that waits undrawn, leaves it where it was.
           try {
-            const opened = await $.ui.open({ id: PANE, title: 'Visualizer', rows: 14 })
+            const opened = await $.ui.open({ id: PANE, title: 'Visualizer', rows: PANE_INLINE_ROWS })
             if (!opened.isPlaced) text = PANE_WAITS
           } finally {
             await notePane($)

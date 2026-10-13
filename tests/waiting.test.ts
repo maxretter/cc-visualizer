@@ -6,7 +6,7 @@ import { clockText } from '../hooks/engine/names'
 import { INDEX } from '../hooks/engine/sources'
 import { BEAT, GRACE, Spectrum } from '../hooks/engine/spectrum'
 import { trail } from '../hooks/engine/trail'
-import { pane, staged, text } from './support'
+import { ink, painted, pane, staged, text } from './support'
 
 describe('waiting on you', () => {
   /** Plays `ms` of music, a frame at a time. */
@@ -31,18 +31,18 @@ describe('waiting on you', () => {
     expect(spectrum.isResting()).toBe(false)
     // Only the vamp plays: the frames can slow down.
     expect(spectrum.isCalm()).toBe(true)
-    const [top] = text(bars.paint('instrument', spectrum, true), 80)
+    const [top] = text(painted(bars, ink, spectrum, true), 80)
     expect(top).toMatch(/^waiting on you \u00b7 0:04/)
     expect(top).toContain('Bash')
     // No spinner on a call that waits.
-    const [, bottom] = text(trail(spectrum, 'instrument', 50, 2), 50)
+    const [, bottom] = text(trail(spectrum, ink, 50, 2), 50)
     expect(bottom?.trimEnd()).toMatch(/ Bash \u00b7 waiting on you \u00b7 0:04$/)
 
     spectrum.answer(ask)
     steps(spectrum, bars, 1_300)
     expect(spectrum.cue).toBe(0)
     expect(spectrum.isCalm()).toBe(false)
-    expect(text(bars.paint('instrument', spectrum, true), 80)[0]).not.toContain('waiting')
+    expect(text(painted(bars, ink, spectrum, true), 80)[0]).not.toContain('waiting')
   })
 
   test('an ask answered within its grace never vamps', () => {

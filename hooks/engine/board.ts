@@ -1,17 +1,16 @@
 // A whole drawing: the main spectrum's bars and, at their right, the
 // subagents' channels, as many as fit.
 
-import type { VizTheme } from '../../types'
-import type { Tone } from './color'
-import { base64, blank } from './cells'
+import type { Ink } from './color'
+import { blank, canvas, pack } from './cells'
 import type { Canvas } from './cells'
 import type { Spectrum } from './spectrum'
 import { mainVoice } from './ensemble'
 import type { Ensemble, Voice } from './ensemble'
 import { focusLead, voiceLabel } from './names'
-import { Bars } from './bars'
+import { Bars, layoutFor, WIDE } from './bars'
 import type { Layout } from './bars'
-import { CHANNEL, Channels, channelsFit, WIDE } from './channels'
+import { CHANNEL, Channels, channelsFit } from './channels'
 
 /** The fewest columns the main bars narrow to while a subagent in focus grows into their room: a channel's. */
 const MAIN_LEAST = CHANNEL
@@ -48,13 +47,13 @@ export class Board {
     readonly rows: number,
     layout?: Layout,
   ) {
-    this.layout = layout ?? { width: columns >= WIDE ? 2 : 1, gap: 1 }
+    this.layout = layout ?? layoutFor(columns)
     this.bars = new Bars(columns, rows, this.layout)
     this.channels = new Channels(channelsFit(columns), rows)
+    this.cells = canvas(columns, rows)
     this.blank = blank(columns * rows)
-    this.cells = { words: this.blank.slice(), columns, left: 0, right: columns }
+    this.legendRow = canvas(columns, 1)
     this.blankRow = blank(columns)
-    this.legendRow = { words: this.blankRow.slice(), columns, left: 0, right: columns }
   }
 
   /**
@@ -81,7 +80,7 @@ export class Board {
   step(spectrum: Spectrum, ensemble: Ensemble, focus?: Voice) {
     this.channels.step(ensemble, spectrum.dt, this.columns - MAIN_LEAST, focus)
     const main = Math.max(Math.min(this.columns, MAIN_LEAST), this.columns - this.channels.width)
-    if (main !== this.bars.columns) this.bars = this.bars.resize(main, { ...this.layout, width: main >= WIDE ? this.layout.width : 1 })
+    if (main !== this.bars.columns) this.bars = this.bars.resize(main, layoutFor(main, this.layout))
     this.bars.step(this.stray(focus)?.spectrum ?? spectrum)
   }
 
@@ -90,8 +89,8 @@ export class Board {
     return this.bars.isSettled() && this.channels.isSettled()
   }
 
-  /** The whole drawing as Raster cells: the main bars, then the channels. */
-  paint(theme: VizTheme, spectrum: Spectrum, ensemble: Ensemble, labels = false, tone: Tone = 'dark', focus?: Voice): string {
+  /** The whole drawing as Raster cells, in `ink`: the main bars, then the channels. */
+  paint(ink: Ink, spectrum: Spectrum, ensemble: Ensemble, labels = false, focus?: Voice): string {
     const { columns, cells } = this
     const { words } = cells
     words.set(this.blank)
@@ -101,19 +100,19 @@ export class Board {
     const width = this.bars.columns
     const isNarrowed = width < WIDE && width < columns
     cells.right = width
-    this.bars.draw(cells, theme, stray?.spectrum ?? spectrum, labels && !isNarrowed, tone, look)
-    if (labels && isNarrowed) voiceLabel(words, columns, 0, this.bars.span, mainVoice(spectrum), 1, theme, tone)
-    if (width < columns) this.channels.draw(words, columns, width, theme, ensemble, tone)
-    return base64(new Uint8Array(words.buffer))
+    this.bars.draw(cells, ink, stray?.spectrum ?? spectrum, labels && !isNarrowed, look)
+    if (labels && isNarrowed) voiceLabel(words, columns, 0, this.bars.span, mainVoice(spectrum), 1, ink)
+    if (width < columns) this.channels.draw(words, columns, width, ink, ensemble)
+    return pack(words)
   }
 
   /** The legend under the main bars and under a channel grown wide, as wide as they are now; nothing under the other channels. */
-  legend(theme: VizTheme, tone: Tone = 'dark'): string {
+  legend(ink: Ink): string {
     const row = this.legendRow
     row.words.set(this.blankRow)
     row.right = this.bars.columns
-    this.bars.drawLegend(row, theme, tone)
-    this.channels.legend(row.words, this.columns, this.bars.columns, theme, tone)
-    return base64(new Uint8Array(row.words.buffer))
+    this.bars.drawLegend(row, ink)
+    this.channels.legend(row.words, this.columns, this.bars.columns, ink)
+    return pack(row.words)
   }
 }

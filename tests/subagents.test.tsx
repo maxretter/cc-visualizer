@@ -10,7 +10,7 @@ import { FRAME_MS } from '../hooks/engine/math'
 import { Spectrum } from '../hooks/engine/spectrum'
 import { trail } from '../hooks/engine/trail'
 import { Stage } from '../hooks/stage'
-import { band, colors, redness, staged, text } from './support'
+import { band, colors, ink, painted, redness, staged, text } from './support'
 
 describe('subagents', () => {
   /** Bar glyphs above the floor, as many as stand in a drawing's rows below its label. */
@@ -115,10 +115,10 @@ describe('subagents', () => {
       spectrum.step()
       bars.step(spectrum)
     }
-    const before = raised(text(bars.paint('instrument', spectrum), 80))
+    const before = raised(text(painted(bars, ink, spectrum), 80))
     expect(before).toBeGreaterThan(0)
     for (const columns of [63, 46, 80]) {
-      expect(raised(text(bars.resize(columns).paint('instrument', spectrum), columns))).toBeGreaterThan(0.5 * before)
+      expect(raised(text(painted(bars.resize(columns), ink, spectrum), columns))).toBeGreaterThan(0.5 * before)
     }
   })
 
@@ -136,7 +136,7 @@ describe('subagents', () => {
       ensemble.step(ms)
       board.step(spectrum, ensemble, ensemble.find(viewed))
     }
-    const paint = () => board.paint('instrument', spectrum, ensemble, true, 'dark', ensemble.find(viewed))
+    const paint = () => board.paint(ink, spectrum, ensemble, true, ensemble.find(viewed))
     const view = (agentId?: string) => {
       viewed = agentId
     }
@@ -309,7 +309,7 @@ describe('subagents', () => {
     const scout = ensemble.join('a1', { name: 'scout' })
     scout.spectrum.startCall('Grep')
     spectrum.endCall(spectrum.startCall('Edit'))
-    const cells = trail(spectrum, 'instrument', 60, 2, 'dark', ensemble)
+    const cells = trail(spectrum, ink, 60, 2, ensemble)
     const [, bottom] = text(cells, 60)
     expect(bottom).toMatch(/Edit · [⠁-⣿] scout Grep {2}$/)
     expect(colors(cells, 60)[1]![bottom!.indexOf('scout')]).toBe(scout.color)
@@ -394,7 +394,7 @@ describe('subagents', () => {
     ensemble.join('a2', { name: 'audit' })
     scout.spectrum.startCall('Grep')
     spectrum.endCall(spectrum.startCall('Edit'))
-    const [, bottom] = text(trail(spectrum, 'instrument', 60, 2, 'dark', ensemble, scout), 60)
+    const [, bottom] = text(trail(spectrum, ink, 60, 2, ensemble, scout), 60)
     expect(bottom).toMatch(/audit · main Edit · [⠁-⣿] scout Grep {2}$/)
   })
 
@@ -419,7 +419,7 @@ describe('subagents', () => {
     for (let t = 0; t < 6_000; t += 100) step(100)
     const fresh = new Board(80, 4, { width: 2, gap: 1, meter: true })
     fresh.step(spectrum, ensemble)
-    expect(paint()).toBe(fresh.paint('instrument', spectrum, ensemble, true, 'dark'))
+    expect(paint()).toBe(fresh.paint(ink, spectrum, ensemble, true))
     expect(text(paint(), 80)[0]).toMatch(/scout\s+audit/)
   })
 
@@ -432,7 +432,7 @@ describe('subagents', () => {
     scout.spectrum.startCall('Grep')
     stage.spectrum.startCall('Bash')
     for (let t = 0; t < 600; t += FRAME_MS) stage.frame(FRAME_MS, () => {})
-    const standing = raised(text(site.board.bars.paint('instrument', stage.spectrum), site.board.bars.columns))
+    const standing = raised(text(painted(site.board.bars, ink, stage.spectrum), site.board.bars.columns))
     expect(standing).toBeGreaterThan(0)
 
     for (const [columns, rows] of [[100, 4], [64, 4], [64, 6]] as const) {
@@ -440,11 +440,11 @@ describe('subagents', () => {
       expect(board.columns).toBe(columns)
       // Before a frame: standing, not risen again from the floor.
       expect(board.isSettled()).toBe(false)
-      expect(raised(text(board.bars.paint('instrument', stage.spectrum), columns))).toBeGreaterThan(0.5 * standing)
+      expect(raised(text(painted(board.bars, ink, stage.spectrum), columns))).toBeGreaterThan(0.5 * standing)
       // Open at once where they fit, the one that no longer does waiting for room.
       expect(board.channels.has(scout)).toBe(true)
       stage.frame(FRAME_MS, () => {})
-      expect(text(board.paint('instrument', stage.spectrum, stage.ensemble, true), columns)[0]).toMatch(columns > 80 ? /scout.*audit/ : /scout.*\+1$/)
+      expect(text(board.paint(ink, stage.spectrum, stage.ensemble, true), columns)[0]).toMatch(columns > 80 ? /scout.*audit/ : /scout.*\+1$/)
     }
   })
 })
