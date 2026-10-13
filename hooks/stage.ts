@@ -48,9 +48,8 @@ export class Stage {
   // What the person has set with /viz: the one copy, which the atoms publish
   // for the drawings and the store keeps across sessions.
   prefs: Prefs = DEFAULTS
-  // What the terminal's background is read from, and the tone every drawing paints for.
+  // What the terminal's background is read from, beside the prefs' ground.
   backdrop: Backdrop = {}
-  tone: Tone = 'dark'
   // Whether Claude is working, as the prompt's band and hint line are told.
   isWorking = false
   // The prompt's column less the band's five, as the band above is told it:
@@ -81,8 +80,9 @@ export class Stage {
     this.driver?.rest()
   }
 
-  retone() {
-    this.tone = toneFor(this.prefs.ground, this.backdrop)
+  /** The tone every drawing paints for: the one /viz ground set, or as the backdrop reads. */
+  get tone(): Tone {
+    return toneFor(this.prefs.ground, this.backdrop)
   }
 
   drawn() {

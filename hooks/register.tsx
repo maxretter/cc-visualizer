@@ -172,7 +172,6 @@ export const register: Register = on => {
         update($, isPlaying, () => frames.isAwake),
       ].map(step => step.catch(() => {})),
     )
-    stage.retone()
     // A band that stays up plays its idle show from the start, as it did before a reload.
     stage.rest()
 
@@ -219,7 +218,6 @@ export const register: Register = on => {
     const set = await next(e)
     if (set.deny === undefined) {
       stage.backdrop = { ...stage.backdrop, theme: set.value }
-      stage.retone()
       if (sites.size > 0) stage.wake()
     }
 
@@ -432,7 +430,6 @@ export const register: Register = on => {
     if (outcome.isDemo) spectrum.playDemo(ensemble)
     const before = stage.prefs
     stage.prefs = outcome.prefs
-    stage.retone()
     await publish($, stage.prefs)
     // Save what this command changed over what is saved: another session may
     // have saved the rest since this one read it. What is saved is read as the
