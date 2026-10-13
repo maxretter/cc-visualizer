@@ -94,9 +94,15 @@ export function legible(color: number, tone: Tone): number {
 export function toneOf(theme: unknown, colorfgbg?: string): Tone {
   if (typeof theme === 'string' && theme.startsWith('light')) return 'light'
   if (typeof theme === 'string' && theme.startsWith('dark')) return 'dark'
+  const background = backgroundOf(colorfgbg)
+  return background === 7 || (background !== undefined && background >= 9) ? 'light' : 'dark'
+}
+
+/** `COLORFGBG`'s background, when its last field that is set is one of the 16 colors; else none. */
+export function backgroundOf(colorfgbg?: string): number | undefined {
   const field = colorfgbg?.split(';').findLast(f => f !== '')
   const background = field !== undefined && /^\d+$/.test(field) ? Number(field) : undefined
-  return background === 7 || (background !== undefined && background >= 9 && background <= 15) ? 'light' : 'dark'
+  return background !== undefined && background <= 15 ? background : undefined
 }
 
 /**

@@ -59,6 +59,9 @@ describe('the background', () => {
     expect(groundText('auto', { theme: 'light' })).toBe("light, from Claude Code's light theme")
     expect(groundText('auto', { theme: 'auto', colorfgbg: '15;0' })).toBe("dark, from the terminal's COLORFGBG (15;0)")
     expect(groundText('auto', { theme: 'auto' })).toBe("dark, assumed: Claude Code's theme is auto and the terminal doesn't say")
+    expect(groundText('auto', { theme: 'auto', colorfgbg: '0;255' })).toBe(
+      "dark, assumed: Claude Code's theme is auto and the terminal's COLORFGBG (0;255) names no color of the 16",
+    )
   })
 })
 
@@ -177,7 +180,9 @@ describe('the doctor', () => {
       "Background: dark, from Claude Code's dark- injected theme",
       'Visualizer: auto, bar above the prompt, theme instrument, idle on',
     ])
-    expect(groundText('auto', { colorfgbg: '15;0\x1b]52;c;aGk=\x07' })).toBe("dark, from the terminal's COLORFGBG (15;0]52;c;aGk=)")
+    expect(groundText('auto', { colorfgbg: '15;0\x1b]52;c;aGk=\x07' })).toBe(
+      "dark, assumed: Claude Code's theme is auto and the terminal's COLORFGBG (15;0]52;c;aGk=) names no color of the 16",
+    )
     expect(printable('\x00\té'.repeat(40) + 'x'.repeat(80))).toBe('x'.repeat(64))
   })
 })

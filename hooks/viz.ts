@@ -5,7 +5,7 @@
 // reads the world, asks these, and does what they say.
 
 import type { VizMode, VizPlace, VizSize, VizTheme } from '../types'
-import { THEME_NAMES, toneOf } from './engine/color'
+import { backgroundOf, THEME_NAMES, toneOf } from './engine/color'
 import type { Tone } from './engine/color'
 
 /** The terminal's background as the person set it: `auto` follows Claude Code's theme. */
@@ -75,7 +75,8 @@ export function groundText(ground: Ground, backdrop: Backdrop): string {
   const tone = toneFor(ground, backdrop)
   if (ground !== 'auto') return `${tone}, as /viz ground set it`
   if (typeof backdrop.theme === 'string' && backdrop.theme !== 'auto') return `${tone}, from Claude Code's ${printable(backdrop.theme)} theme`
-  if (backdrop.colorfgbg) return `${tone}, from the terminal's COLORFGBG (${printable(backdrop.colorfgbg)})`
+  if (backgroundOf(backdrop.colorfgbg) !== undefined) return `${tone}, from the terminal's COLORFGBG (${printable(backdrop.colorfgbg!)})`
+  if (backdrop.colorfgbg) return `${tone}, assumed: Claude Code's theme is auto and the terminal's COLORFGBG (${printable(backdrop.colorfgbg)}) names no color of the 16`
   return `${tone}, assumed: Claude Code's theme is auto and the terminal doesn't say`
 }
 
