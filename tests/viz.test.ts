@@ -27,6 +27,20 @@ const closed: Situation = { isPaneOpen: false, backdrop: {} }
 const open: Situation = { isPaneOpen: true, backdrop: {} }
 const as = (prefs: Partial<Prefs>): Prefs => ({ ...DEFAULTS, ...prefs })
 
+/** /viz `args` that sets the prefs, its outcome read as one: the test fails on another kind. */
+const set = (args: string, prefs: Prefs, situation: Situation) => {
+  const outcome = command(args, prefs, situation)
+  if (outcome.kind !== 'set') throw new Error(`/viz ${args}: a ${outcome.kind}, not a set`)
+  return outcome
+}
+
+/** /viz `args` that replies alone, its outcome read as one: the test fails on another kind. */
+const reply = (args: string, prefs: Prefs, situation: Situation) => {
+  const outcome = command(args, prefs, situation)
+  if (outcome.kind !== 'reply') throw new Error(`/viz ${args}: a ${outcome.kind}, not a reply`)
+  return outcome
+}
+
 describe('prefs', () => {
   test('restored from the store: each value checked, the defaults for the rest', () => {
     expect(prefsFrom(undefined)).toEqual(DEFAULTS)
@@ -68,9 +82,9 @@ describe('the background', () => {
 describe('/viz', () => {
   test('bare, or toggle, turns it off and back on: off closes the pane and every drawing', () => {
     for (const verb of ['', 'toggle']) {
-      const off = command(verb, DEFAULTS, closed)
+      const off = set(verb, DEFAULTS, closed)
       expect(off).toMatchObject({ prefs: as({ mode: 'off' }), text: 'Visualizer off.', pane: 'close', isOff: true })
-      const back = command(verb, off.prefs, closed)
+      const back = set(verb, off.prefs, closed)
       expect(back).toMatchObject({ prefs: as({ mode: 'auto' }), text: 'Visualizer on: it plays while Claude works.' })
       expect(back.isOff).toBeUndefined()
     }
@@ -78,28 +92,33 @@ describe('/viz', () => {
 
   test('auto, always, off and on set the mode; on keeps one that is on', () => {
     expect(command('always', DEFAULTS, closed)).toMatchObject({ prefs: as({ mode: 'always' }), text: 'Visualizer on, always shown.' })
-    expect(command('auto', as({ mode: 'always' }), closed).prefs.mode).toBe('auto')
+    expect(set('auto', as({ mode: 'always' }), closed).prefs.mode).toBe('auto')
     expect(command('off', as({ mode: 'off' }), closed)).toMatchObject({ isOff: true, pane: 'close' })
-    expect(command('on', as({ mode: 'off' }), closed).prefs.mode).toBe('auto')
+    expect(set('on', as({ mode: 'off' }), closed).prefs.mode).toBe('auto')
     expect(command('on', as({ mode: 'always' }), closed)).toMatchObject({ prefs: as({ mode: 'always' }), text: 'Visualizer on.' })
   })
 
   test('bar and mini set the size, turn it on, and close the pane they step aside for', () => {
-    expect(command('mini', DEFAULTS, closed)).toEqual({ prefs: as({ size: 'mini' }), text: 'Visualizer: mini, at the right edge.', pane: undefined })
+    expect(command('mini', DEFAULTS, closed)).toEqual({
+      kind: 'set',
+      prefs: as({ size: 'mini' }),
+      text: 'Visualizer: mini, at the right edge.',
+      pane: undefined,
+    })
     expect(command('bar', as({ mode: 'off', size: 'mini' }), closed)).toMatchObject({
       prefs: as({ mode: 'auto' }),
       text: 'Visualizer on, a bar across the whole width.',
     })
-    expect(command('bar', DEFAULTS, open).pane).toBe('close')
+    expect(set('bar', DEFAULTS, open).pane).toBe('close')
   })
 
   test('pos sets the place, or swaps it, and says where it cannot go', () => {
     expect(command('pos below', DEFAULTS, closed)).toMatchObject({ prefs: as({ place: 'below' }), text: 'Visualizer below the prompt.' })
-    expect(command('pos', as({ place: 'below' }), closed).prefs.place).toBe('above')
-    expect(command('pos', DEFAULTS, open).pane).toBe('close')
-    expect(command('pos top', DEFAULTS, closed)).toMatchObject({ prefs: DEFAULTS, isReplyOnly: true })
-    expect(command('pos top', DEFAULTS, closed).text).toContain('/viz pane')
-    expect(command('pos sideways', DEFAULTS, closed)).toMatchObject({ text: 'Usage: /viz pos [above|below]', isReplyOnly: true })
+    expect(set('pos', as({ place: 'below' }), closed).prefs.place).toBe('above')
+    expect(set('pos', DEFAULTS, open).pane).toBe('close')
+    expect(command('pos top', DEFAULTS, closed)).toMatchObject({ kind: 'reply' })
+    expect(reply('pos top', DEFAULTS, closed).text).toContain('/viz pane')
+    expect(command('pos sideways', DEFAULTS, closed)).toMatchObject({ text: 'Usage: /viz pos [above|below]', kind: 'reply' })
   })
 
   test('pane opens it; demo plays, turning it on', () => {
@@ -110,23 +129,23 @@ describe('/viz', () => {
 
   test('idle toggles the show, or sets it; its reply says where it plays', () => {
     expect(command('idle', DEFAULTS, closed)).toMatchObject({ prefs: as({ idle: false }), text: 'Idle animation off: the bars rest flat.' })
-    expect(command('idle on', as({ idle: false }), closed).text).toContain('/viz always')
-    expect(command('idle on', as({ mode: 'always', idle: false }), closed).text).toContain('a swell, rain and a scanner')
-    expect(command('idle off', DEFAULTS, closed).prefs.idle).toBe(false)
-    expect(command('idle maybe', DEFAULTS, closed)).toMatchObject({ text: 'Usage: /viz idle [on|off]', isReplyOnly: true })
+    expect(set('idle on', as({ idle: false }), closed).text).toContain('/viz always')
+    expect(set('idle on', as({ mode: 'always', idle: false }), closed).text).toContain('a swell, rain and a scanner')
+    expect(set('idle off', DEFAULTS, closed).prefs.idle).toBe(false)
+    expect(command('idle maybe', DEFAULTS, closed)).toMatchObject({ text: 'Usage: /viz idle [on|off]', kind: 'reply' })
   })
 
   test('theme sets one by name, or cycles through them, round again', () => {
     expect(command('theme synthwave', DEFAULTS, closed)).toMatchObject({ prefs: as({ theme: 'synthwave' }), text: 'Visualizer theme: synthwave.' })
-    expect(command('theme', DEFAULTS, closed).prefs.theme).toBe('claude')
-    expect(command('theme', as({ theme: 'classic' }), closed).prefs.theme).toBe('instrument')
-    expect(command('theme neon', DEFAULTS, closed)).toMatchObject({ isReplyOnly: true, prefs: DEFAULTS })
+    expect(set('theme', DEFAULTS, closed).prefs.theme).toBe('claude')
+    expect(set('theme', as({ theme: 'classic' }), closed).prefs.theme).toBe('instrument')
+    expect(command('theme neon', DEFAULTS, closed)).toMatchObject({ kind: 'reply' })
   })
 
   test('theme echoes a name it lacks as printable ASCII, 64 characters at most', () => {
-    expect(command('theme neon', DEFAULTS, closed).text).toBe('No theme "neon". Themes: instrument, claude, synthwave, classic.')
-    expect(command('theme \x1b[2J‮neon\x07', DEFAULTS, closed).text).toBe('No theme "[2jneon". Themes: instrument, claude, synthwave, classic.')
-    expect(command(`theme ${'n'.repeat(100)}`, DEFAULTS, closed).text).toBe(`No theme "${'n'.repeat(64)}". Themes: instrument, claude, synthwave, classic.`)
+    expect(reply('theme neon', DEFAULTS, closed).text).toBe('No theme "neon". Themes: instrument, claude, synthwave, classic.')
+    expect(reply('theme \x1b[2J‮neon\x07', DEFAULTS, closed).text).toBe('No theme "[2jneon". Themes: instrument, claude, synthwave, classic.')
+    expect(reply(`theme ${'n'.repeat(100)}`, DEFAULTS, closed).text).toBe(`No theme "${'n'.repeat(64)}". Themes: instrument, claude, synthwave, classic.`)
   })
 
   test('ground sets the background, or says which it is using', () => {
@@ -135,20 +154,20 @@ describe('/viz', () => {
       prefs: as({ ground: 'dark' }),
       text: 'Visualizer background: dark, as /viz ground set it.',
     })
-    expect(command('ground', DEFAULTS, { isPaneOpen: false, backdrop }).text).toBe("Visualizer background: light, from Claude Code's light theme.")
-    expect(command('ground beige', DEFAULTS, closed)).toMatchObject({ text: 'Usage: /viz ground [auto|light|dark]', isReplyOnly: true })
+    expect(set('ground', DEFAULTS, { isPaneOpen: false, backdrop }).text).toBe("Visualizer background: light, from Claude Code's light theme.")
+    expect(command('ground beige', DEFAULTS, closed)).toMatchObject({ text: 'Usage: /viz ground [auto|light|dark]', kind: 'reply' })
   })
 
   test('doctor reports; help, or anything else, lists the commands, changing nothing', () => {
-    expect(command('doctor', DEFAULTS, closed)).toMatchObject({ prefs: DEFAULTS, isDoctor: true })
+    expect(command('doctor', DEFAULTS, closed)).toEqual({ kind: 'doctor' })
     for (const args of ['help', 'sing']) {
-      expect(command(args, as({ mode: 'always' }), closed)).toEqual({ prefs: as({ mode: 'always' }), text: USAGE, isReplyOnly: true })
+      expect(command(args, as({ mode: 'always' }), closed)).toEqual({ kind: 'reply', text: USAGE })
     }
   })
 
   test('takes its verb in any case, and spaces around it', () => {
-    expect(command('  ALWAYS ', DEFAULTS, closed).prefs.mode).toBe('always')
-    expect(command('Pos  Below', DEFAULTS, closed).prefs.place).toBe('below')
+    expect(set('  ALWAYS ', DEFAULTS, closed).prefs.mode).toBe('always')
+    expect(set('Pos  Below', DEFAULTS, closed).prefs.place).toBe('below')
   })
 })
 

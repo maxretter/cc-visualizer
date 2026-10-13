@@ -1,6 +1,6 @@
 // The session the hooks share: the music, the drawings its frames repaint,
-// and what the person has set. No `$`: register.tsx reads the world into it
-// and runs the frames, and music.ts plays on it.
+// and what the person has set. No `$`: register.tsx reads the world into it,
+// frames.ts runs its frames, and music.ts plays on it.
 
 import type { Layout } from './engine/bars'
 import { Board } from './engine/board'
@@ -31,6 +31,14 @@ export type Site = {
 
 type Mount = { layout?: Layout; labels?: boolean; names?: Site['names']; legend?: string }
 
+/** What runs the frames: frames.ts's, which each session start binds. */
+export type Driver = { wake(): void; rest(): void }
+
+/** The columns the engine keeps beside the prompt's own: the band above is told the screen's less these. */
+const GUTTER = 5
+/** The screen's columns, when the engine does not say. */
+const SCREEN = 80
+
 export class Stage {
   // The animation is the module's own: a reload starts it from silence. The
   // main loop plays on the spectrum, each subagent on its own voice.
@@ -45,29 +53,46 @@ export class Stage {
   // What the person has set with /viz: the one copy, which the atoms publish
   // for the drawings and the store keeps across sessions.
   prefs: Prefs = DEFAULTS
-  // What the terminal's background is read from, and the tone every drawing paints for.
+  // What the terminal's background is read from, beside the prefs' ground.
   backdrop: Backdrop = {}
-  tone: Tone = 'dark'
   // Whether Claude is working, as the prompt's band and hint line are told.
   isWorking = false
-  // The prompt's column less the band's five, as the band above is told it:
-  // narrower beside a docked pane. The hint line is told only the screen's.
+  // The prompt's column, the screen's less the gutter, as the band above is
+  // told it: narrower beside a docked pane. The hint line is told only the screen's.
   bodyColumns: number | undefined
   // The subagent whose transcript the person has open, as the band above and
   // the pane are told it; none for the main conversation's. The hint line is
   // not told it, and the band below draws for what the band above was last told.
   viewed: string | undefined
-  // Runs the frames until the music stops and the bars have fallen; made by
-  // session.start, whose `$` the frames draw through.
-  wake = () => {}
-  // Starts the idle show on a drawing that stays up, if nothing plays yet.
-  rest = () => {}
+  // What runs the frames: none until the session starts, and none run.
+  private driver: Driver | undefined
 
   /** `pane`: the pane's id, its drawing's among the sites. */
   constructor(private readonly pane: string) {}
 
-  retone() {
-    this.tone = toneFor(this.prefs.ground, this.backdrop)
+  /** The frames are run by `driver` from now on. */
+  bind(driver: Driver) {
+    this.driver = driver
+  }
+
+  /** Runs the frames until the music stops and the bars have fallen. */
+  wake() {
+    this.driver?.wake()
+  }
+
+  /** Starts the idle show on a drawing that stays up, if nothing plays yet. */
+  rest() {
+    this.driver?.rest()
+  }
+
+  /** The tone every drawing paints for: the one /viz ground set, or as the backdrop reads. */
+  get tone(): Tone {
+    return toneFor(this.prefs.ground, this.backdrop)
+  }
+
+  /** The prompt's column, as the band above was last told it; until it has been, the screen's less the gutter. */
+  promptColumns(viewport: { columns: number } | undefined): number {
+    return this.bodyColumns ?? (viewport?.columns ?? SCREEN) - GUTTER
   }
 
   drawn() {
