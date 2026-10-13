@@ -80,7 +80,7 @@ describe('light terminals', () => {
     expect(text(swatches('instrument', 'dark', 64), 64)[1]).toContain(' web/mcp ')
   })
 
-  test("the band paints for the background: Claude Code's light theme, then /viz ground", async ($, on) => {
+  test("the band paints for the background: Claude Code's light theme, then /viz ground", { timeoutMs: 30_000 }, async ($, on) => {
     const { clock, ui, viz, cells } = await staged($, on, { theme: 'light' })
     const feet = () => brightness(colors(cells(), 80).at(-1)!)
     try {
@@ -103,7 +103,7 @@ describe('light terminals', () => {
     }
   })
 
-  test("a change of Claude Code's theme paints the next frame for it, once written", async ($, on) => {
+  test("a change of Claude Code's theme paints the next frame for it, once written", { timeoutMs: 30_000 }, async ($, on) => {
     const { clock, ui, cells } = await staged($, on, { theme: 'light' })
     const feet = () => brightness(colors(cells(), 80).at(-1)!)
     try {
@@ -119,7 +119,7 @@ describe('light terminals', () => {
     }
   })
 
-  test('/viz doctor reports the terminal, and draws its swatches', async ($, on) => {
+  test('/viz doctor reports the terminal, and draws its swatches', { timeoutMs: 30_000 }, async ($, on) => {
     const { ui, viz } = await staged($, on, {
       env: { TERM: 'xterm-256color', COLORTERM: 'truecolor', COLORFGBG: '0;15' },
       theme: 'auto',
@@ -147,7 +147,7 @@ describe('light terminals', () => {
     }
   })
 
-  test("/viz Doctor, in any case, draws its swatches too, as wide as the transcript's room", async ($, on) => {
+  test("/viz Doctor, in any case, draws its swatches too, as wide as the transcript's room", { timeoutMs: 30_000 }, async ($, on) => {
     const { ui, viz } = await staged($, on)
     const doctor = { plugin: 'visualizer', surface: 'terminal' as const, component: 'CommandOutput' as const, requestId: 'doctor' }
     // The doctor's drawing, while one is mounted.

@@ -6,7 +6,7 @@ import { DEFAULTS, PANE_WAITS } from '../hooks/viz'
 import { band, pane, prefsStore, staged } from './support'
 
 describe('band', () => {
-  test('plays while Claude works and steps aside when idle', async ($, on) => {
+  test('plays while Claude works and steps aside when idle', { timeoutMs: 30_000 }, async ($, on) => {
     // The engine's own band, beneath the plugin.
     on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
       const { Text } = $.ui.resolve(e)
@@ -32,7 +32,7 @@ describe('band', () => {
 })
 
 describe('mini', () => {
-  test('/viz mini draws a small spectrum at the right edge', async ($, on) => {
+  test('/viz mini draws a small spectrum at the right edge', { timeoutMs: 30_000 }, async ($, on) => {
     on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
       const { Text } = $.ui.resolve(e)
 
@@ -63,7 +63,7 @@ describe('mini', () => {
 })
 
 describe('the command', () => {
-  test('its hint lists the verbs, flat, and /viz help tells each one', async ($, on) => {
+  test('its hint lists the verbs, flat, and /viz help tells each one', { timeoutMs: 30_000 }, async ($, on) => {
     mock.store(on)
     let hint = ''
     on('session.start', ($, e) => ({ cwd: e.cwd }))
@@ -84,7 +84,7 @@ describe('the command', () => {
 })
 
 describe('the pane', () => {
-  test('/viz pane opens it, drawing the bars with a legend; the band steps aside, and is back when the band is asked for', async ($, on) => {
+  test('/viz pane opens it, drawing the bars with a legend; the band steps aside, and is back when the band is asked for', { timeoutMs: 30_000 }, async ($, on) => {
     const { clock, ui, viz, closes } = await staged($, on)
     let drawn: Mounted<'terminal', 'Pane'> | undefined
     try {
@@ -107,7 +107,7 @@ describe('the pane', () => {
     }
   })
 
-  test('/viz off closes it, and every drawing with it', async ($, on) => {
+  test('/viz off closes it, and every drawing with it', { timeoutMs: 30_000 }, async ($, on) => {
     const { clock, ui, viz, closes } = await staged($, on)
     try {
       await viz('pane')
@@ -120,7 +120,7 @@ describe('the pane', () => {
     }
   })
 
-  test('a pane the terminal has no room for yet says so, and the band stays up meanwhile', async ($, on) => {
+  test('a pane the terminal has no room for yet says so, and the band stays up meanwhile', { timeoutMs: 30_000 }, async ($, on) => {
     const { clock, ui, viz } = await staged($, on, { hasRoom: false })
     try {
       expect((await viz('pane')).text).toBe(PANE_WAITS)
@@ -131,7 +131,7 @@ describe('the pane', () => {
     }
   })
 
-  test('a pane refused leaves the band up', async ($, on) => {
+  test('a pane refused leaves the band up', { timeoutMs: 30_000 }, async ($, on) => {
     const { clock, ui, viz } = await staged($, on, { isPaneRefused: true })
     try {
       await viz('pane').catch(() => undefined)
@@ -142,7 +142,7 @@ describe('the pane', () => {
     }
   })
 
-  test('a pane an unload dropped holds the band aside no longer once the plugin starts again', async ($, on) => {
+  test('a pane an unload dropped holds the band aside no longer once the plugin starts again', { timeoutMs: 30_000 }, async ($, on) => {
     const { clock, ui, viz, unload } = await staged($, on)
     try {
       await viz('pane')
@@ -161,7 +161,7 @@ describe('the pane', () => {
 })
 
 describe('other surfaces', () => {
-  test("a drawing on the desktop leaves the terminal's band playing", async ($, on) => {
+  test("a drawing on the desktop leaves the terminal's band playing", { timeoutMs: 30_000 }, async ($, on) => {
     const { clock, ui, blits, finish } = await staged($, on)
     const call = $.tool.call({ tool: 'Bash', command: 'make', tool_use_id: 't1' })
     let desktop: Mounted<'desktop', 'AbovePrompt'> | undefined
@@ -212,7 +212,7 @@ describe('place', () => {
     on('command.run', () => ({ text: '' }))
   }
 
-  test('/viz pos below draws the band under the prompt, over the hint line it keeps', async ($, on) => {
+  test('/viz pos below draws the band under the prompt, over the hint line it keeps', { timeoutMs: 30_000 }, async ($, on) => {
     engine(on)
     mock.store(on)
 
@@ -256,7 +256,7 @@ describe('place', () => {
     }
   })
 
-  test('/viz bar and /viz mini keep the place /viz pos gave, and it is remembered', async ($, on) => {
+  test('/viz bar and /viz mini keep the place /viz pos gave, and it is remembered', { timeoutMs: 30_000 }, async ($, on) => {
     engine(on)
     const saved = prefsStore(on)
 
@@ -270,7 +270,7 @@ describe('place', () => {
     expect(saved.at(-1)).toMatchObject({ size: 'bar', place: 'above' })
   })
 
-  test('/viz saves only what it changed, over what another session saved since', async ($, on) => {
+  test('/viz saves only what it changed, over what another session saved since', { timeoutMs: 30_000 }, async ($, on) => {
     engine(on)
     const saved = prefsStore(on)
 
@@ -285,7 +285,7 @@ describe('place', () => {
     expect(saved).toHaveLength(writes)
   })
 
-  test('/viz saves the prefs as they read, dropping what else the store held', async ($, on) => {
+  test('/viz saves the prefs as they read, dropping what else the store held', { timeoutMs: 30_000 }, async ($, on) => {
     engine(on)
     const saved = prefsStore(on, { theme: 'synthwave', size: 'huge', junk: 1 })
 

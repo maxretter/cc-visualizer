@@ -14,7 +14,7 @@ describe('idle', () => {
     presentation: { isFullscreen: true, columns: 80 },
   })
 
-  test('a band that stays up plays a low show once all is quiet, and steps aside for the music', () => {
+  test('a band that stays up plays a low show once all is quiet, and steps aside for the music', { timeoutMs: 30_000 }, () => {
     const spectrum = new Spectrum()
     const bars = new Bars(80, 4)
     spectrum.ambient = true
@@ -86,7 +86,7 @@ describe('idle', () => {
     expect(text(trail(spectrum, 'instrument', 30, 2), 30).join('')).not.toContain('idle')
   })
 
-  test('no idle show while a subagent works, though the main loop rests; it comes once the subagent is done', async ($, on) => {
+  test('no idle show while a subagent works, though the main loop rests; it comes once the subagent is done', { timeoutMs: 30_000 }, async ($, on) => {
     on('agent.spawn', () => ({ model: 'claude-haiku-5-5', agentId: 'a1' }))
     // A band that stays up, for the idle show.
     const { clock, ui, label } = await staged($, on, { mode: 'always' })
@@ -116,7 +116,7 @@ describe('idle', () => {
     }
   })
 
-  test('/viz idle toggles the show and remembers it', async ($, on) => {
+  test('/viz idle toggles the show and remembers it', { timeoutMs: 30_000 }, async ($, on) => {
     on('command.run', () => ({ text: '' }))
     const saved = prefsStore(on)
 

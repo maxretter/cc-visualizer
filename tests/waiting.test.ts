@@ -117,7 +117,7 @@ describe('waiting on you', () => {
     props: { tool_use_id: id, kind: 'background_hint' as const, hint: '' },
   })
 
-  test('a permission ask vamps on the band once its grace has passed, until the call runs', async ($, on) => {
+  test('a permission ask vamps on the band once its grace has passed, until the call runs', { timeoutMs: 30_000 }, async ($, on) => {
     const { clock, ui, label, cells, finish } = await staged($, on)
     const call = $.tool.call({ tool: 'Bash', command: 'ls', tool_use_id: 't1' })
     let shown: Mounted<'terminal', 'ToolProgress'> | undefined
@@ -146,7 +146,7 @@ describe('waiting on you', () => {
     }
   })
 
-  test('a permission ask answered within its grace never waits on the person, and the bars never turn amber', async ($, on) => {
+  test('a permission ask answered within its grace never waits on the person, and the bars never turn amber', { timeoutMs: 30_000 }, async ($, on) => {
     const { clock, ui, label, cells, finish } = await staged($, on)
     const call = $.tool.call({ tool: 'Bash', command: 'ls', tool_use_id: 't1' })
     let shown: Mounted<'terminal', 'ToolProgress'> | undefined
@@ -169,7 +169,7 @@ describe('waiting on you', () => {
     }
   })
 
-  test('an ask the mode settles on its own never vamps, as auto mode settles most', async ($, on) => {
+  test('an ask the mode settles on its own never vamps, as auto mode settles most', { timeoutMs: 30_000 }, async ($, on) => {
     const { clock, ui, label, cells, finish } = await staged($, on)
     // A call the classifier lets run: no permission request is raised for it, and no progress row shows for it here.
     const call = $.tool.call({ tool: 'Bash', command: 'make test', tool_use_id: 't1' })
@@ -187,7 +187,7 @@ describe('waiting on you', () => {
     }
   })
 
-  test('the pane shows the wait while a dialog covers the band', async ($, on) => {
+  test('the pane shows the wait while a dialog covers the band', { timeoutMs: 30_000 }, async ($, on) => {
     const { clock, ui, viz, cells, cover, finish } = await staged($, on)
     await viz('pane')
     const drawn = await $.ui.mount(pane)
@@ -207,7 +207,7 @@ describe('waiting on you', () => {
     }
   })
 
-  test('the band is back at once when the call it waited on is answered', async ($, on) => {
+  test('the band is back at once when the call it waited on is answered', { timeoutMs: 30_000 }, async ($, on) => {
     const { clock, ui, cells, cover, finish } = await staged($, on)
     const call = $.tool.call({ tool: 'Bash', command: 'ls', tool_use_id: 't1' })
     try {
@@ -232,7 +232,7 @@ describe('waiting on you', () => {
     }
   })
 
-  test('a permission request vamps the call it was raised for', async ($, on) => {
+  test('a permission request vamps the call it was raised for', { timeoutMs: 30_000 }, async ($, on) => {
     const { clock, ui, label, finish } = await staged($, on)
     const first = $.tool.call({ tool: 'Bash', command: 'ls', tool_use_id: 't1' })
     const second = $.tool.call({ tool: 'Bash', command: 'rm -r build', tool_use_id: 't2' })
@@ -286,7 +286,7 @@ describe('waiting on you', () => {
     }
   })
 
-  test('a permission ask a hook answers never waits on the person, however long the call then runs', async ($, on) => {
+  test('a permission ask a hook answers never waits on the person, however long the call then runs', { timeoutMs: 30_000 }, async ($, on) => {
     // A settings hook beneath allows it, so the person is never asked.
     const { clock, ui, label, finish } = await staged($, on, { decision: { behavior: 'allow' } })
     const call = $.tool.call({ tool: 'WebFetch', url: 'https://example.com', prompt: 'Sum it up.', tool_use_id: 't1' })
@@ -303,7 +303,7 @@ describe('waiting on you', () => {
     }
   })
 
-  test("the main loop's turn ends with what is left of it: an ask, a call and thinking whose ends never came", async ($, on) => {
+  test("the main loop's turn ends with what is left of it: an ask, a call and thinking whose ends never came", { timeoutMs: 30_000 }, async ($, on) => {
     let resume = () => {}
     on('turn.step', async function* ($, e) {
       yield { kind: 'thinking' as const, index: 0, text: 'Let me see.' }

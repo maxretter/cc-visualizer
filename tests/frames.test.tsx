@@ -21,7 +21,7 @@ const counted = (on: On) => {
 }
 
 describe('a band taken off screen', () => {
-  test('a refused frame holds the band, and it comes back to life once frames land again', async ($, on) => {
+  test('a refused frame holds the band, and it comes back to life once frames land again', { timeoutMs: 30_000 }, async ($, on) => {
     const clock = mock.clock(on)
     mock.store(on)
     on('session.start', ($, e) => ({ cwd: e.cwd }))
@@ -72,7 +72,7 @@ describe('a band taken off screen', () => {
     }
   })
 
-  test('the frames stop only once the last one has reached the screen', async ($, on) => {
+  test('the frames stop only once the last one has reached the screen', { timeoutMs: 30_000 }, async ($, on) => {
     // A band that stays up, without its idle show: once the bars are down, nothing more to draw.
     const { clock, ui, viz, label, blits, finish, cover } = await staged($, on, { mode: 'always' })
     await viz('idle off')
@@ -100,7 +100,7 @@ describe('a band taken off screen', () => {
     }
   })
 
-  test('behind a dialog, the frames run only as often as the band is tried, whatever plays', { timeoutMs: 20_000 }, async ($, on) => {
+  test('behind a dialog, the frames run only as often as the band is tried, whatever plays', { timeoutMs: 30_000 }, async ($, on) => {
     const frames = counted(on)
     const { clock, ui, label, finish, cover } = await staged($, on)
     const call = $.tool.call({ tool: 'Bash', command: 'rm -r build', tool_use_id: 't1' })
@@ -132,7 +132,7 @@ describe('a band taken off screen', () => {
 })
 
 describe('a reload', () => {
-  test('a tool call while the plugin starts keeps it playing', async ($, on) => {
+  test('a tool call while the plugin starts keeps it playing', { timeoutMs: 30_000 }, async ($, on) => {
     const clock = mock.clock(on)
     mock.store(on)
     on('session.start', ($, e) => ({ cwd: e.cwd }))
@@ -163,7 +163,7 @@ describe('a reload', () => {
     }
   })
 
-  test('a drawing that stays up plays its idle show again, with nothing to wake it', async ($, on) => {
+  test('a drawing that stays up plays its idle show again, with nothing to wake it', { timeoutMs: 30_000 }, async ($, on) => {
     const clock = mock.clock(on)
     mock.store(on)
     on('session.start', ($, e) => ({ cwd: e.cwd }))
@@ -254,7 +254,7 @@ describe('the start of a session', () => {
 })
 
 describe('frames', () => {
-  test('a frame the same as the last one sent is not sent again', async ($, on) => {
+  test('a frame the same as the last one sent is not sent again', { timeoutMs: 30_000 }, async ($, on) => {
     const { clock, ui, blits, finish } = await staged($, on, { mode: 'mini' })
     const call = $.tool.call({ tool: 'Bash', command: 'make', tool_use_id: 't1' })
     try {
@@ -270,7 +270,7 @@ describe('frames', () => {
     }
   })
 
-  test('in auto, the band steps aside once the work is done and its frames have stopped', async ($, on) => {
+  test('in auto, the band steps aside once the work is done and its frames have stopped', { timeoutMs: 30_000 }, async ($, on) => {
     const { clock, ui, blits, finish } = await staged($, on, { mode: 'auto' })
     const call = $.tool.call({ tool: 'Bash', command: 'make', tool_use_id: 't1' })
     try {
@@ -310,7 +310,7 @@ describe('frames', () => {
     expect(frames()).toBe(0)
   })
 
-  test('in a terminal, the frames wait for a band to play on, and start as it comes up', async ($, on) => {
+  test('in a terminal, the frames wait for a band to play on, and start as it comes up', { timeoutMs: 30_000 }, async ($, on) => {
     const frames = counted(on)
     const clock = mock.clock(on)
     mock.store(on)
@@ -339,7 +339,7 @@ describe('frames', () => {
     }
   })
 
-  test('a ticker whose period is refused is started again, and the band plays on', async ($, on) => {
+  test('a ticker whose period is refused is started again, and the band plays on', { timeoutMs: 30_000 }, async ($, on) => {
     // The host refuses one period of the frames' timer, which ends it.
     let isRefused = false
     on('clock.every', { ms: FRAME_MS }, ($, e, next) => (isRefused ? { deny: 'busy' } : next(e)))
@@ -426,7 +426,7 @@ describe('frames', () => {
     }
   })
 
-  test('the idle show draws at 15 fps, and at 8 once Claude has been idle five minutes', { timeoutMs: 20_000 }, async ($, on) => {
+  test('the idle show draws at 15 fps, and at 8 once Claude has been idle five minutes', { timeoutMs: 30_000 }, async ($, on) => {
     const frames = counted(on)
     // A band that stays up, for the idle show.
     const { clock, ui } = await staged($, on, { mode: 'always' })

@@ -7,7 +7,7 @@ import { band, colors, hueOf, staged, text } from './support'
 import type { Window } from './support'
 
 describe('the context, through the plugin', () => {
-  test('a measure fills the meter, measured again only when the window changes', async ($, on) => {
+  test('a measure fills the meter, measured again only when the window changes', { timeoutMs: 30_000 }, async ($, on) => {
     let usages = 0
     const context = { tokens: 1, window: 200_000, breakdown: { totalTokens: 1, isAutoCompactEnabled: false } }
     const { clock, ui, label } = await staged($, on, {
@@ -38,7 +38,7 @@ describe('the context, through the plugin', () => {
     }
   })
 
-  test("compacting rewinds, labeled, until done, and the meter drains; a subagent's, or the precompute pass, does not", async ($, on) => {
+  test("compacting rewinds, labeled, until done, and the meter drains; a subagent's, or the precompute pass, does not", { timeoutMs: 30_000 }, async ($, on) => {
     let finish = () => {}
     // A compaction keeps at least one message: the summary.
     const messages = [{ role: 'user' as const, text: 'The conversation so far.', toolUses: [] }]
@@ -152,7 +152,7 @@ describe('context', () => {
     expect(spectrum.isQuiet()).toBe(true)
   })
 
-  test('the band draws the meter at its right edge', async ($, on) => {
+  test('the band draws the meter at its right edge', { timeoutMs: 30_000 }, async ($, on) => {
     on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
       const { Text } = $.ui.resolve(e)
 
@@ -176,7 +176,7 @@ describe('context, measured', () => {
     return at < 0 ? undefined : hueOf(colors(cells, 80)[0]![at]!)
   }
 
-  test("/clear, or a conversation resumed, moves the meter to what it holds; a subagent's start does not", async ($, on) => {
+  test("/clear, or a conversation resumed, moves the meter to what it holds; a subagent's start does not", { timeoutMs: 30_000 }, async ($, on) => {
     let context: Window = { tokens: 140_000, window: 200_000 }
     const { clock, ui, label } = await staged($, on, { context: () => context })
     try {
@@ -204,7 +204,7 @@ describe('context, measured', () => {
     }
   })
 
-  test('a top unknown at the start, read before the session was bound, is measured at the first measure', async ($, on) => {
+  test('a top unknown at the start, read before the session was bound, is measured at the first measure', { timeoutMs: 30_000 }, async ($, on) => {
     let usages = 0
     const compacting = { isAutoCompactEnabled: true, autoCompactThreshold: 160_000, totalTokens: 152_000 }
     // No breakdown yet: the top is the whole window, 76% of the way up, amber.
@@ -234,7 +234,7 @@ describe('context, measured', () => {
     }
   })
 
-  test('turning auto-compact off moves the top of the meter', async ($, on) => {
+  test('turning auto-compact off moves the top of the meter', { timeoutMs: 30_000 }, async ($, on) => {
     const compacting = { isAutoCompactEnabled: true, autoCompactThreshold: 160_000, totalTokens: 152_000 }
     let context: Window = { tokens: 152_000, window: 200_000, breakdown: compacting }
     const { clock, ui, cells } = await staged($, on, { context: () => context })

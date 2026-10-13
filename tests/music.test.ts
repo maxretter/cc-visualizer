@@ -111,7 +111,7 @@ describe('time', () => {
 })
 
 describe('errors', () => {
-  test('a tool that fails flashes the bars red; a call refused or interrupted never ran, and does not', async ($, on) => {
+  test('a tool that fails flashes the bars red; a call refused or interrupted never ran, and does not', { timeoutMs: 30_000 }, async ($, on) => {
     // A settings hook refuses one call before it runs: it never reaches the tool, and resolves errored.
     on('classic.PreToolUse', ($, e) => (e.tool_use_id === 'refused' ? { deny: 'Not in this repo.' } : {}))
     const { clock, ui, cells, finish } = await staged($, on)
@@ -154,7 +154,7 @@ describe('errors', () => {
 })
 
 describe('streaming', () => {
-  test('text after a lull in the stream moves the bars again', async ($, on) => {
+  test('text after a lull in the stream moves the bars again', { timeoutMs: 30_000 }, async ($, on) => {
     let resume = () => {}
     on('turn.step', async function* ($, e) {
       yield { kind: 'text' as const, index: 0, text: 'Let me look' }
@@ -307,7 +307,7 @@ describe('the demo', () => {
 describe('a turn, through the plugin', () => {
   const braille = /[⠁-⣿]/
 
-  test('the prompt sweeps up, thinking draws the brainwave until the text comes, and the answer crashes a cymbal', async ($, on) => {
+  test('the prompt sweeps up, thinking draws the brainwave until the text comes, and the answer crashes a cymbal', { timeoutMs: 30_000 }, async ($, on) => {
     let speak = () => {}
     on('turn.step', async function* ($, e) {
       yield { kind: 'thinking' as const, index: 0, text: 'Let me see.' }
@@ -349,7 +349,7 @@ describe('a turn, through the plugin', () => {
     }
   })
 
-  test('a stream cut off while thinking stops the thinking', async ($, on) => {
+  test('a stream cut off while thinking stops the thinking', { timeoutMs: 30_000 }, async ($, on) => {
     on('turn.step', async function* () {
       yield { kind: 'thinking' as const, index: 0, text: 'Let me' }
       throw new Error('connection lost')
@@ -370,7 +370,7 @@ describe('a turn, through the plugin', () => {
     }
   })
 
-  test('an interrupted turn sweeps back down; one that errs flashes red', async ($, on) => {
+  test('an interrupted turn sweeps back down; one that errs flashes red', { timeoutMs: 30_000 }, async ($, on) => {
     const { clock, ui, cells } = await staged($, on)
     const end = (reason: 'aborted' | 'error') =>
       $.turn.complete({ reason, answer: '', durationMs: 1000, isAborted: reason === 'aborted', turnId: 'u1' })

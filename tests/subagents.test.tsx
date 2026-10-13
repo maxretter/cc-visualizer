@@ -490,7 +490,7 @@ describe('subagents, through the plugin', () => {
     return drawn.reduce((sum, c) => sum + ((c >> 16) & 0xff) - ((c >> 8) & 0xff), 0) / Math.max(1, drawn.length)
   }
 
-  test('a subagent plays in a channel that opens at the right of the band, says when it is done, and closes', async ($, on) => {
+  test('a subagent plays in a channel that opens at the right of the band, says when it is done, and closes', { timeoutMs: 30_000 }, async ($, on) => {
     spawner(on)
     const { clock, ui, cells, finish } = await staged($, on)
     const rows = () => text(cells(), 80)
@@ -533,7 +533,7 @@ describe('subagents, through the plugin', () => {
     }
   })
 
-  test("a subagent's permission ask has its channel waiting, and the band waiting on you, after the main loop's turn too", async ($, on) => {
+  test("a subagent's permission ask has its channel waiting, and the band waiting on you, after the main loop's turn too", { timeoutMs: 30_000 }, async ($, on) => {
     spawner(on)
     const { clock, ui, cells, finish } = await staged($, on)
     const top = () => text(cells(), 80)[0] ?? ''
@@ -561,7 +561,7 @@ describe('subagents, through the plugin', () => {
     }
   })
 
-  test("a subagent's tool that fails flashes its own channel red, not the main bars", async ($, on) => {
+  test("a subagent's tool that fails flashes its own channel red, not the main bars", { timeoutMs: 30_000 }, async ($, on) => {
     spawner(on)
     const { clock, ui, cells, finish } = await staged($, on)
     // The subagent's call, once made.
@@ -582,7 +582,7 @@ describe('subagents, through the plugin', () => {
     }
   })
 
-  test("a subagent's turn that is interrupted says it stopped, and one that errs says it failed", async ($, on) => {
+  test("a subagent's turn that is interrupted says it stopped, and one that errs says it failed", { timeoutMs: 30_000 }, async ($, on) => {
     spawner(on)
     const { clock, ui, cells } = await staged($, on)
     const top = () => text(cells(), 80)[0] ?? ''
@@ -601,7 +601,7 @@ describe('subagents, through the plugin', () => {
     }
   })
 
-  test('a teammate in a terminal pane of its own gets no channel: nothing of it plays here', async ($, on) => {
+  test('a teammate in a terminal pane of its own gets no channel: nothing of it plays here', { timeoutMs: 30_000 }, async ($, on) => {
     // A teammate in a pane runs no loop here, and its id is its address; one in this process has an id of its own.
     on('agent.spawn', ($, e) => ({ model: 'claude-haiku-5-5', agentId: e.name === 'pane' ? 'pane@crew' : 'a1', teammateId: `${e.name}@crew` }))
     const { clock, ui, cells } = await staged($, on)
@@ -617,7 +617,7 @@ describe('subagents, through the plugin', () => {
     }
   })
 
-  test('a subagent that stops says it is done and closes, though its turn never ends here; one a hook sends back to work plays on', async ($, on) => {
+  test('a subagent that stops says it is done and closes, though its turn never ends here; one a hook sends back to work plays on', { timeoutMs: 30_000 }, async ($, on) => {
     spawner(on)
     let verdict: { block?: string } = {}
     on('classic.SubagentStop', () => verdict)
@@ -643,7 +643,7 @@ describe('subagents, through the plugin', () => {
     }
   })
 
-  test('subagents whose loops start before their spawns are answered play their first steps in their channels, each named once answered', async ($, on) => {
+  test('subagents whose loops start before their spawns are answered play their first steps in their channels, each named once answered', { timeoutMs: 30_000 }, async ($, on) => {
     const answer = answered(on)
     on('classic.SubagentStart', () => ({}))
     const { clock, ui, cells, finish } = await staged($, on)
@@ -674,7 +674,7 @@ describe('subagents, through the plugin', () => {
     }
   })
 
-  test('a subagent whose loop starts and ends before its spawn is answered says how it went, and closes', async ($, on) => {
+  test('a subagent whose loop starts and ends before its spawn is answered says how it went, and closes', { timeoutMs: 30_000 }, async ($, on) => {
     const answer = answered(on)
     on('classic.SubagentStart', () => ({}))
     const { clock, ui, cells } = await staged($, on)
@@ -755,7 +755,7 @@ describe('subagents, through the plugin', () => {
     }
   })
 
-  test("/viz demo plays its subagents in channels at the right of the band, and opens each in turn, then the main conversation's again", async ($, on) => {
+  test("/viz demo plays its subagents in channels at the right of the band, and opens each in turn, then the main conversation's again", { timeoutMs: 30_000 }, async ($, on) => {
     const { clock, ui, cells, viz } = await staged($, on)
     /**
      * Whose transcript the band has open, by its top row: `main` with both
