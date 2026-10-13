@@ -2,6 +2,7 @@
 
 import { FRAME_MS } from './math'
 import { Spectrum } from './spectrum'
+import type { Ending } from './spectrum'
 
 /** What is known of a subagent from its spawn: the name it was given, its task in a few words, its type. */
 export type VoiceInfo = { name?: string; description?: string; type?: string }
@@ -123,7 +124,7 @@ export class Ensemble {
    * Subagent `id`'s loop ended, for `reason`: its channel plays the end, says
    * how it went, and fades. False for a loop never heard of, which is not a voice's.
    */
-  end(id: string, reason: string): boolean {
+  end(id: string, reason: Ending): boolean {
     const voice = this.find(id)
     if (voice === undefined) return this.known.has(id)
     if (voice.outcome !== undefined) return true

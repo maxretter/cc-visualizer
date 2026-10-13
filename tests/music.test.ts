@@ -8,7 +8,7 @@ import { clockText } from '../hooks/engine/names'
 import { sourceOf, SOURCES } from '../hooks/engine/sources'
 import type { SourceId } from '../hooks/engine/sources'
 import { Spectrum } from '../hooks/engine/spectrum'
-import type { Call } from '../hooks/engine/spectrum'
+import type { Call, Ending } from '../hooks/engine/spectrum'
 import { Step } from '../hooks/engine/step'
 import type { Chunk } from '../hooks/engine/step'
 import { trail } from '../hooks/engine/trail'
@@ -211,7 +211,7 @@ describe('a model request', () => {
 })
 
 describe('the end of a turn', () => {
-  const ended = (reason: string, isSubagent = false) => {
+  const ended = (reason: Ending, isSubagent = false) => {
     const spectrum = new Spectrum()
     spectrum.ended(reason, isSubagent)
     spectrum.step()

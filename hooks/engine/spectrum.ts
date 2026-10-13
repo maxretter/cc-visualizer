@@ -72,6 +72,12 @@ const MIND_OUT = 220
 const CALMING = 320
 const WANDER = 110
 
+/**
+ * Why a turn ended, as `turn.complete` says it: the model answered, the
+ * person interrupted it, the model refused, or an error ended it.
+ */
+export type Ending = 'answer' | 'aborted' | 'refusal' | 'error'
+
 export class Spectrum {
   readonly level = new Float64Array(N)
   /** Drum hits since the last step, and streamed characters, a rate over it. */
@@ -226,7 +232,7 @@ export class Spectrum {
    * A turn ended, for `reason`: an answer crashes a cymbal (a subagent's
    * softer), an interrupt sweeps back down, anything else flashes red.
    */
-  ended(reason: string, isSubagent = false) {
+  ended(reason: Ending, isSubagent = false) {
     if (reason === 'aborted') this.scratch()
     else if (reason === 'answer') this.cymbal(isSubagent ? 0.4 : 1)
     else this.error()
