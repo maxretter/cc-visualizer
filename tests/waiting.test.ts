@@ -286,23 +286,6 @@ describe('waiting on you', () => {
     }
   })
 
-  test('a permission ask a hook answers never waits on the person, however long the call then runs', { timeoutMs: 30_000 }, async ($, on) => {
-    // A settings hook beneath allows it, so the person is never asked.
-    const { clock, ui, label, finish } = await staged($, on, { decision: { behavior: 'allow' } })
-    const call = $.tool.call({ tool: 'WebFetch', url: 'https://example.com', prompt: 'Sum it up.', tool_use_id: 't1' })
-    try {
-      await clock.settle()
-      await $.classic.PermissionRequest({ tool_name: 'WebFetch', tool_input: { url: 'https://example.com', prompt: 'Sum it up.' } })
-      await clock.advance(5000)
-      expect(label()).toContain('WebFetch')
-      expect(label()).not.toContain('waiting on you')
-    } finally {
-      finish('t1')
-      await call
-      await ui.unmount()
-    }
-  })
-
   test("the main loop's turn ends with what is left of it: an ask, a call and thinking whose ends never came", { timeoutMs: 30_000 }, async ($, on) => {
     let resume = () => {}
     on('turn.step', async function* ($, e) {

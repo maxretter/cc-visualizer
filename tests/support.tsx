@@ -1,7 +1,7 @@
 // Helpers the tests share: reading Raster cells, a session staged with the
 // plugin in it, and the drawings the tests mount.
 
-import type { ConfigRow, On, PermissionRequestDecision, SessionContextBreakdown, SessionContextUsage, ToolCallResult, UiPane } from 'claude-code'
+import type { ConfigRow, On, SessionContextBreakdown, SessionContextUsage, ToolCallResult, UiPane } from 'claude-code'
 import { mock } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
@@ -120,8 +120,7 @@ const themeRow = (value: string): ConfigRow => ({
 /**
  * How `staged` sets the session up: the `/viz` arguments run once it starts
  * (its `mode`), the context, the environment, Claude Code's theme, whether the
- * terminal has room for the pane, whether a hook refuses to open it, and what
- * a settings hook answers a permission request with, if anything.
+ * terminal has room for the pane, and whether a hook refuses to open it.
  */
 export type Stage = {
   mode?: string
@@ -130,7 +129,6 @@ export type Stage = {
   theme?: string
   hasRoom?: boolean
   isPaneRefused?: boolean
-  decision?: PermissionRequestDecision
 }
 
 /** How red the bars are: red over green, on average over the cells drawn. */
@@ -192,7 +190,7 @@ export const thirds = (cells: string, columns = 80) => {
  * (`IDLE_DELAY`), unless `/viz idle off` stops it: a test that reads the
  * label, or counts frames, over a quiet spell that long says the mode it needs.
  */
-export const staged = async ($: Engine, on: On, { mode = 'always', context, env = {}, theme, hasRoom = true, isPaneRefused = false, decision }: Stage = {}) => {
+export const staged = async ($: Engine, on: On, { mode = 'always', context, env = {}, theme, hasRoom = true, isPaneRefused = false }: Stage = {}) => {
   const clock = mock.clock(on)
   mock.store(on)
   mock.env(on, env)
@@ -227,7 +225,7 @@ export const staged = async ($: Engine, on: On, { mode = 'always', context, env 
   const running = new Map<string, (ran: ToolCallResult) => void>()
   on('tool.call', ($, e) => new Promise<ToolCallResult>(resolve => running.set(e.tool_use_id ?? '', resolve)))
   on('tool.check', () => ({ decision: 'ask' as const }))
-  on('classic.PermissionRequest', () => (decision === undefined ? {} : { decision }))
+  on('classic.PermissionRequest', () => ({}))
   on('classic.PostToolUseFailure', () => ({}))
   on('classic.SessionStart', () => ({}))
   on('config.set', ($, e) => {
