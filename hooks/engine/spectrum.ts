@@ -4,14 +4,29 @@
 // high. Events feed energy into their instrument (a tool call is a drum hit,
 // streamed text a sustained tone, a tool still running a held note), the
 // energy dies away, and `Bars` turns the spectrum into bars with falling peak
-// caps, packed as `Raster` cells. Like all of the engine, it is pure: no `$`,
-// so it tests alone.
+// caps, packed as `Raster` cells. Over the instruments play parts of their
+// own, each in a file of its own: the person's typing (`keys.ts`), the sweeps
+// (`sweep.ts`), the vamp while the person is waited on (`vamp.ts`), the
+// context meter (`meter.ts`) and the idle show (`idle.ts`). Like all of the
+// engine, it is pure: no `$`, so it tests alone.
 
 import { bump, cycle, ease, fade, FRAME_MS, random } from './math'
-import { INDEX, N, placeOf, shortName, sourceOf, SOURCES } from './sources'
+import { INDEX, N, shortName, SIGMA, sourceOf, SOURCES } from './sources'
 import type { SourceId } from './sources'
 import { DEMO, Demo } from './demo'
 import type { Ensemble } from './ensemble'
+import { IdleShow } from './idle'
+import type { Scene } from './idle'
+import { Keys } from './keys'
+import { Meter } from './meter'
+import { Sweep } from './sweep'
+import { GRACE, Vamp } from './vamp'
+import type { Ask } from './vamp'
+
+// The parts' times and types, for the spectrum's callers.
+export { IDLE_DELAY } from './idle'
+export { BEAT, GRACE } from './vamp'
+export type { Ask } from './vamp'
 
 /** The longest the animation moves in one step: a longer gap (a stall, a sleep) moves the clocks, not the bars. */
 const MAX_STEP = 250
@@ -29,72 +44,34 @@ const SCALE: Record<SourceId, number> = {
 const HIT = 3
 /** How fast an instrument dies away: its energy halves every 150 ms. */
 const DECAY = 150
-const SIGMA = 0.055
-
-/** The idle show's swell at a point of the spectrum, `ms` into the show: a low wave rolling up it, breathing. */
-function drift(x: number, ms: number): number {
-  const swell = 0.5 + 0.5 * Math.sin(2 * Math.PI * 1.4 * x - cycle(ms, 5_900))
-  const ripple = 0.7 + 0.3 * Math.sin(2 * Math.PI * 2.6 * x + cycle(ms, 9_400) + 1)
-  const breath = 0.8 + 0.2 * Math.sin(cycle(ms, 10_900))
-  return 0.34 * swell * ripple * breath
-}
-
-/** A typed key's note on the spectrum: where it plays, from when, how loud, and how wide. */
-type Note = { x: number; at: number; energy: number; sigma: number }
+/** How fast a cymbal dies away (it halves every 275 ms), and an error's red flash fades. */
+const CRASH = 275
+const FLASH = 220
 
 /** One run of calls to the same tool: its name is drawn once, `×count`; `endedAt`, when its last run ended. */
 export type Call = { name: string; source: SourceId; count: number; running: number; endedAt: number }
 
-/** A tool call put to the person: its band, its call, when it was asked, and how long before the vamp. */
-export type Ask = { source: SourceId; call?: Call; at: number; grace: number }
-
 /** How long a finished call's name stays at full strength, then how long it takes to fade. */
 const LINGER = 2_000
 const FADE = 1_000
-
-/** The idle show's scenes, in turn: a rolling swell, rain, a scanner sweeping back and forth. */
-export const SCENES = ['swell', 'rain', 'scanner'] as const
-/** How long each scene plays, the end of it crossfading into the next. */
-const SCENE = 20_000
-const SCENE_FADE = 2_000
-/** The scanner's sweep there and back. */
-const SCAN = 8_000
-/** Drops a second at the height of the rain. */
-const RAIN = 6
-/** How long all must be quiet before the idle show starts: a pause in typing, or a reply being read, is not idle. */
-export const IDLE_DELAY = 8_000
-/** A typed key's note: how fast it fades (it halves every 120 ms), and the beat of a run of them (a paste, a burst of keys). */
-const NOTE = 120
-const RUN = 25
-/** The most notes a run plays: a longer paste plays this many of its characters, spread over it. */
-const RUN_NOTES = 32
-
-const SURROGATE = /[\ud800-\udfff]/
-/** Whether a pair of surrogates, one character beyond the BMP, starts at code unit `k` of `text`. */
-const isPair = (text: string, k: number) => {
-  const high = text.charCodeAt(k)
-  if (high < 0xd800 || high > 0xdbff) return false
-  const low = text.charCodeAt(k + 1)
-  return low >= 0xdc00 && low <= 0xdfff
-}
+/** How many of the latest calls are kept, for their names to show. */
+const CALLS = 16
 
 /** While the model thinks, sparks of thought a second on its band: these when it is calm, up to as many more again as its text streams. */
 const SPARKS = 1.5
 /** How long a spark's spike takes to run the length of the brainwave. */
 export const SPIKE = 900
-
+/** How restless the thinking gets at most, as its text streams in. */
+const RESTLESS = 0.45
 /**
- * How long an ask waits before the vamp: a hook may answer a permission
- * request on its own, and the vamp is for the ones the person answers.
+ * How fast the brainwave comes in as the model thinks (half the way every
+ * 180 ms), and goes once it stops; how fast the thinking calms, its
+ * restlessness halving; and how fast its band wanders to the level it heads for.
  */
-export const GRACE = 1_500
-/** A beat of the vamp (100 bpm), how long it plays before its pulses shrink, and how long they take to. */
-export const BEAT = 600
-const BORED = 30_000
-const BORED_FADE = 5_000
-/** Between the meter's glints, and how long one takes to run up it. */
-const GLINT_EVERY = 10_000
-const GLINT_RUN = 800
+const MIND_IN = 180
+const MIND_OUT = 220
+const CALMING = 320
+const WANDER = 110
 
 export class Spectrum {
   readonly level = new Float64Array(N)
@@ -109,7 +86,7 @@ export class Spectrum {
   thinking = 0
   /** How present the brainwave is: rises while thinking, fades after. */
   mind = 0
-  /** How busy the thinking is, from its streamed text: 0 to 0.45. */
+  /** How busy the thinking is, from its streamed text: 0 to `RESTLESS`. */
   restless = 0
   /** Where the thinking's band wanders: its level, the level it heads for, and when it turns for another. */
   private readonly thought = { level: 0, target: 0, turnAt: 0 }
@@ -126,52 +103,44 @@ export class Spectrum {
    * which knows whether a band stays up while idle.
    */
   ambient = false
-  /** How present the idle show is: fades in once all is quiet, out at the first sound. */
-  idle = 0
-  /** How long since the music stopped: how long Claude has been idle. */
-  quietFor = 0
-  /** How long the idle show has played, across rests: where it is in its scenes. */
-  private show = 0
-  /** How much each scene plays now, by `SCENES`. */
-  private readonly scene = new Float64Array(SCENES.length)
-  /** The rain's drops: where each fell, and how much of it is left. */
-  private readonly drops: { x: number; energy: number }[] = []
-  /** The notes the person's typing plays, still ringing or still to come in a run. */
-  private readonly notes: Note[] = []
+  /** Its chances, which its thinking, its idle show and its demo draw on. */
   private readonly rand = random(0x1d1e)
   private crash = 0
-  private sweep: number | undefined
-  private sweepDirection = 1
   /** The demo, played on this spectrum, drawing on its chances. */
   private readonly demo = new Demo(this, this.rand)
   /** The latest tool calls, oldest first, while their names show. */
   readonly calls: Call[] = []
-  /** Tool calls put to the person, until they are answered. */
-  private readonly asks = new Set<Ask>()
-  /** Asks past their grace, by instrument: the vamp pulses their bands. */
-  private readonly cued = new Int32Array(N)
-  /**
-   * Of those, the ones for a call of this spectrum's, by instrument: as many of
-   * its held notes rest while they wait. A subagent's ask, heard here too, has
-   * its call on the subagent's own spectrum, and rests none of these.
-   */
-  private readonly hushed = new Int32Array(N)
+  /** The parts that play over the instruments. */
+  private readonly keys = new Keys()
+  private readonly sweep = new Sweep()
+  private readonly vamp = new Vamp()
+  private readonly meter = new Meter()
+  private readonly idleShow = new IdleShow(this.rand)
+
+  /** How present the idle show is: fades in once all is quiet, out at the first sound. */
+  get idle(): number {
+    return this.idleShow.presence
+  }
+
+  /** How long since the music stopped: how long Claude has been idle. */
+  get quietFor(): number {
+    return this.idleShow.quietFor
+  }
+
   /** How present the vamp is: rises once an ask is past its grace, falls once it is answered. */
-  cue = 0
-  /** How long the vamp has played: where it is in its bars, and whether it has thinned out. */
-  private vamp = 0
-  /** Compactions running: the tape rewinds until they finish. */
-  private rewinding = 0
-  /** How fast the sweep runs, in spectra a second. */
-  private sweepSpeed = 1.5
+  get cue(): number {
+    return this.vamp.presence
+  }
+
   /** The context's share of the window, 0 to 100, as its label says it; undefined until measured. */
-  contextPercent: number | undefined
-  /** How near auto-compact the context is, 0 to 1: where the meter is heading. */
-  private fill = 0
-  /** The meter as drawn: rises to `fill` quickly, drains slowly. */
-  gauge = 0
-  /** When the meter's latest glint started: every so often, and at each measure. */
-  private glintAt = 0
+  get contextPercent(): number | undefined {
+    return this.meter.percent
+  }
+
+  /** The context meter as drawn, 0 to 1: rises quickly to how near auto-compact the context is, drains slowly. */
+  get gauge(): number {
+    return this.meter.gauge
+  }
 
   /** A drum hit on an instrument. */
   hit(id: SourceId, strength = 1) {
@@ -181,7 +150,7 @@ export class Spectrum {
   /** Streamed characters, a sustained tone while they keep coming. */
   stream(id: SourceId, chars: number, gain = 1) {
     this.feed[INDEX[id]] = this.feed[INDEX[id]]! + (chars / SCALE[id]) * gain
-    if (id === 'think') this.restless = Math.min(0.45, this.restless + (chars / 150) * gain)
+    if (id === 'think') this.restless = Math.min(RESTLESS, this.restless + (chars / 150) * gain)
   }
 
   /** A model request starts thinking; `endThinking` once its reply or a tool call comes. */
@@ -216,7 +185,7 @@ export class Spectrum {
     }
     const call = { name, source, count: 1, running: 1, endedAt: this.now }
     this.calls.push(call)
-    if (this.calls.length > 16) this.calls.shift()
+    if (this.calls.length > CALLS) this.calls.shift()
     return call
   }
 
@@ -235,38 +204,11 @@ export class Spectrum {
 
   /**
    * The person typed `text` into the prompt: each character a note where its
-   * key sits, louder for a capital, a space a soft breath across the middle,
-   * and a paste or a burst of keys a run of them. With `isErased`, the text was
-   * deleted: quieter notes, the run going backward.
+   * key sits, a paste or a burst of keys a run of them. With `isErased`, the
+   * text was deleted: quieter notes, the run going backward.
    */
   typed(text: string, isErased = false) {
-    // A paste may run to megabytes, and only a run of its characters plays:
-    // they are read where they sit, the text never copied. Its length is in
-    // characters, a pair of surrogates one; without any, nearly always, each
-    // code unit is one, and is read straight from its place.
-    let length = text.length
-    if (SURROGATE.test(text)) {
-      length = 0
-      for (let k = 0; k < text.length; k += isPair(text, k) ? 2 : 1) length += 1
-    }
-    const count = Math.min(length, RUN_NOTES)
-    const run: string[] = []
-    // The run's characters, found in the order they sit in the text: character `c` starts at code unit `k`.
-    for (let m = 0, c = 0, k = 0; m < count; m++) {
-      const n = isErased ? count - 1 - m : m
-      const i = Math.floor((n * length) / count)
-      const place = isErased ? length - 1 - i : i
-      if (length === text.length) k = place
-      else for (; c < place; c++) k += isPair(text, k) ? 2 : 1
-      run[n] = text.slice(k, isPair(text, k) ? k + 2 : k + 1)
-    }
-    for (let n = 0; n < count; n++) {
-      const ch = run[n]!
-      const at = this.now + n * RUN
-      const loud = isErased ? 0.5 : 1
-      if (ch.trim() === '') this.notes.push({ x: 0.5, at, energy: 0.3 * loud, sigma: 0.14 })
-      else this.notes.push({ x: placeOf(ch), at, energy: (ch === ch.toLowerCase() ? 0.7 : 0.95) * loud, sigma: 0.03 })
-    }
+    this.keys.typed(this.now, text, isErased)
   }
 
   /**
@@ -275,22 +217,12 @@ export class Spectrum {
    * caret only moved.
    */
   edited(text: string, start: number, end: number, inputText: string) {
-    const erased = text.slice(start, end)
-    if (inputText !== '') this.typed(inputText)
-    else if (erased !== '') this.typed(erased, true)
-    else this.moved(text.length === 0 ? 0.5 : start / text.length)
-  }
-
-  /** The prompt's caret moved, to `x` of the way through the text: a faint tick there. */
-  moved(x: number) {
-    this.notes.push({ x: 0.06 + 0.88 * Math.max(0, Math.min(1, x)), at: this.now, energy: 0.25, sigma: 0.02 })
+    this.keys.edited(this.now, text, start, end, inputText)
   }
 
   /** A sweep up the spectrum: a prompt was sent. */
   kick() {
-    this.sweep = 0
-    this.sweepDirection = 1
-    this.sweepSpeed = 1.5
+    this.sweep.up()
   }
 
   /**
@@ -305,53 +237,35 @@ export class Spectrum {
 
   /** A sweep down: the turn was interrupted. */
   scratch() {
-    this.sweep = 1
-    this.sweepDirection = -1
-    this.sweepSpeed = 1.5
+    this.sweep.down()
   }
 
   /** A tool call put to the person: the vamp, once `grace` passes unanswered; `answer` when they do. */
   ask(source: SourceId, call?: Call, grace = GRACE): Ask {
-    const ask = { source, call, at: this.now, grace }
-    this.asks.add(ask)
-    return ask
+    return this.vamp.ask(this.now, source, call, grace)
   }
 
   answer(ask: Ask) {
-    this.asks.delete(ask)
-  }
-
-  /** Whether an ask is past its grace: the person is being waited on. */
-  private isCued(ask: Ask): boolean {
-    return this.now - ask.at >= ask.grace
+    this.vamp.answer(ask)
   }
 
   /** How long since the person was first asked, of the asks past their grace; undefined while none is. */
   waitedFor(): number | undefined {
-    let first: number | undefined
-    for (const ask of this.asks) if (this.isCued(ask) && (first === undefined || ask.at < first)) first = ask.at
-    return first === undefined ? undefined : this.now - first
-  }
-
-  /** How many of a call's runs wait on the person. */
-  private waitingOn(call: Call): number {
-    let n = 0
-    for (const ask of this.asks) if (ask.call === call && this.isCued(ask)) n += 1
-    return n
+    return this.vamp.waitedFor(this.now)
   }
 
   /** A compaction starts: the tape rewinds until `endRewind`. */
   beginRewind() {
-    this.rewinding += 1
+    this.sweep.beginRewind()
   }
 
   endRewind() {
-    this.rewinding = Math.max(0, this.rewinding - 1)
+    this.sweep.endRewind()
   }
 
   /** While compacting. */
   isRewinding(): boolean {
-    return this.rewinding > 0
+    return this.sweep.isRewinding()
   }
 
   /**
@@ -361,16 +275,12 @@ export class Spectrum {
    * `percent` (nothing reported yet), it empties, unlabeled.
    */
   measure(percent: number | undefined, limit = 1, isInstant = false) {
-    this.contextPercent = percent === undefined ? undefined : Math.max(0, Math.min(100, percent))
-    this.fill = percent === undefined ? 0 : Math.max(0, Math.min(1, percent / 100 / Math.max(0.05, Math.min(1, limit))))
-    if (isInstant) this.gauge = this.fill
-    this.glintAt = this.now
+    this.meter.measure(this.now, percent, limit, isInstant)
   }
 
   /** How far a glint has run up the meter, 0 to 1; undefined between glints. */
   glint(): number | undefined {
-    const t = (this.now - this.glintAt) / GLINT_RUN
-    return t < 1 ? t : undefined
+    return this.meter.glint(this.now)
   }
 
   /** A crash cymbal, heavier in the highs: the turn finished. */
@@ -405,21 +315,15 @@ export class Spectrum {
     this.dt = ms
     if (this.demo.isPlaying) this.demo.step(ms)
     const t = this.now
-    this.cued.fill(0)
-    this.hushed.fill(0)
-    for (const ask of this.asks) {
-      if (!this.isCued(ask)) continue
-      const i = INDEX[ask.source]
-      this.cued[i] = this.cued[i]! + 1
-      if (ask.call !== undefined) this.hushed[i] = this.hushed[i]! + 1
-    }
+    this.vamp.step(t, passed, ms)
+    const { hushed } = this.vamp
     const decay = fade(DECAY, ms)
     // A stream is a rate: what came in over the step, as much as came in a frame.
     const frames = Math.max(ms, FRAME_MS / 4) / FRAME_MS
     for (let i = 0; i < N; i++) {
       const hit = 1 - Math.exp(-(this.hits[i]! + this.feed[i]! / frames))
       let next = Math.max(this.level[i]! * decay, hit)
-      if (this.held[i]! > this.hushed[i]!) next = Math.max(next, 0.22 + 0.08 * Math.sin(cycle(t, 830) + i * 1.7))
+      if (this.held[i]! > hushed[i]!) next = Math.max(next, 0.22 + 0.08 * Math.sin(cycle(t, 830) + i * 1.7))
       this.level[i] = next < 0.004 ? 0 : next
       this.hits[i] = 0
       this.feed[i] = 0
@@ -428,47 +332,19 @@ export class Spectrum {
     else this.thought.level = 0
     // Each eases toward where it is heading, or dies away, by its half-life.
     const mind = this.thinking > 0 ? Math.min(1, 0.6 + this.restless) : 0
-    this.mind = ease(this.mind, mind, mind > this.mind ? 180 : 220, ms)
+    this.mind = ease(this.mind, mind, mind > this.mind ? MIND_IN : MIND_OUT, ms)
     if (mind === 0 && this.mind < 0.02) this.mind = 0
-    this.restless = this.restless < 0.005 ? 0 : this.restless * fade(320, ms)
-    if (this.sweep !== undefined) {
-      this.sweep += (this.sweepSpeed * this.sweepDirection * ms) / 1000
-      if (this.sweep > 1.15 || this.sweep < -0.15) this.sweep = undefined
-    }
-    // Compacting: the tape rewinds, sweep after sweep down the spectrum.
-    if (this.rewinding > 0 && this.sweep === undefined) {
-      this.sweep = 1.15
-      this.sweepDirection = -1
-      this.sweepSpeed = 2.4
-    }
-    const cue = this.cued.some(n => n > 0) ? 1 : 0
-    this.cue = ease(this.cue, cue, cue > this.cue ? 275 : 140, ms)
-    if (cue === 0 && this.cue < 0.01) this.cue = 0
-    if (cue === 1) this.vamp += passed
-    else if (this.cue === 0) this.vamp = 0
-    const gauge = ease(this.gauge, this.fill, this.fill > this.gauge ? 140 : 560, ms)
-    this.gauge = Math.abs(this.fill - gauge) < 0.002 ? this.fill : gauge
-    if (t - this.glintAt >= GLINT_EVERY) this.glintAt = t
-    this.crash = this.crash < 0.004 ? 0 : this.crash * fade(275, ms)
-    this.flash = this.flash < 0.01 ? 0 : this.flash * fade(220, ms)
+    this.restless = this.restless < 0.005 ? 0 : this.restless * fade(CALMING, ms)
+    this.sweep.step(ms)
+    this.meter.step(t, ms)
+    this.crash = this.crash < 0.004 ? 0 : this.crash * fade(CRASH, ms)
+    this.flash = this.flash < 0.01 ? 0 : this.flash * fade(FLASH, ms)
     while (this.sparks.length > 0 && t - this.sparks[0]!.at >= SPIKE) this.sparks.shift()
-    // The typed notes ring from when they come in.
-    for (let i = this.notes.length - 1; i >= 0; i--) {
-      const note = this.notes[i]!
-      if (note.at > t) continue
-      note.energy *= fade(NOTE, Math.min(ms, t - note.at))
-      if (note.energy < 0.01) this.notes.splice(i, 1)
-    }
+    this.keys.step(t, ms)
     for (let i = this.calls.length - 1; i >= 0; i--) {
       if (this.strength(this.calls[i]!) === 0) this.calls.splice(i, 1)
     }
-    const isResting = this.isResting()
-    this.quietFor = isResting ? this.quietFor + passed : 0
-    const idle = this.ambient && isResting && this.quietFor >= IDLE_DELAY ? 1 : 0
-    this.idle = ease(this.idle, idle, idle > this.idle ? 900 : 140, ms)
-    if (idle === 0 && this.idle < 0.01) this.idle = 0
-    if (this.idle > 0) this.play(ms)
-    else this.drops.length = 0
+    this.idleShow.step(passed, ms, this.isResting(), this.ambient)
   }
 
   /**
@@ -482,8 +358,8 @@ export class Spectrum {
       thought.target = 0.08 + 0.3 * this.rand()
       thought.turnAt = this.now + (150 + 500 * this.rand()) * (1 - this.restless)
     }
-    thought.level = ease(thought.level, thought.target, 110, ms)
-    const sparks = SPARKS * (1 + this.restless / 0.45)
+    thought.level = ease(thought.level, thought.target, WANDER, ms)
+    const sparks = SPARKS * (1 + this.restless / RESTLESS)
     if (this.rand() < 1 - Math.exp((-sparks * ms) / 1000)) this.spark(0.15 + 0.3 * this.rand(), this.rand() < 0.5)
     const i = INDEX.think
     this.level[i] = Math.max(this.level[i]!, thought.level)
@@ -495,28 +371,9 @@ export class Spectrum {
     this.sparks.push({ at: this.now, isFromRight })
   }
 
-  /** The idle show moves on by `ms`: its scenes, and the rain while it falls. */
-  private play(ms: number) {
-    this.show += ms
-    const t = this.show % (SCENE * SCENES.length)
-    const now = Math.floor(t / SCENE)
-    const crossfade = Math.max(0, (t % SCENE) - (SCENE - SCENE_FADE)) / SCENE_FADE
-    this.scene.fill(0)
-    this.scene[now] = 1 - crossfade
-    this.scene[(now + 1) % SCENES.length] = crossfade
-    const left = fade(100, ms)
-    for (let i = this.drops.length - 1; i >= 0; i--) {
-      const drop = this.drops[i]!
-      drop.energy *= left
-      if (drop.energy < 0.01) this.drops.splice(i, 1)
-    }
-    const falls = 1 - Math.exp((-RAIN * this.scene[1]! * ms) / 1000)
-    if (this.rand() < falls) this.drops.push({ x: this.rand(), energy: 0.4 + 0.45 * this.rand() })
-  }
-
   /** The scene the idle show plays most now. */
-  sceneNow(): (typeof SCENES)[number] {
-    return SCENES[this.scene.indexOf(Math.max(...this.scene))]!
+  sceneNow(): Scene {
+    return this.idleShow.sceneNow()
   }
 
   /** The energy at a point of the spectrum, 0 (lowest) to 1 (highest). */
@@ -529,63 +386,32 @@ export class Spectrum {
       if (l > 0) energy += l * bump(x - SOURCES[i]!.at, SIGMA)
     }
     energy += 0.12 * (sum / N)
-    if (this.sweep !== undefined) energy += 0.9 * bump(x - this.sweep, 0.045)
+    energy += this.sweep.at(x)
     energy += this.crash * (0.15 + 0.6 * x)
-    for (const note of this.notes) if (note.at <= this.now) energy += note.energy * bump(x - note.x, note.sigma)
-    if (this.idle > 0) energy += this.idle * this.idleAt(x)
-    if (this.cue > 0) energy += this.cue * this.vampAt(x)
+    energy = this.keys.addAt(this.now, x, energy)
+    energy += this.idleShow.at(x)
+    energy += this.vamp.at(x)
     return energy
   }
 
-  /** Where the vamp is: the beat of its bar, and how far into that beat. */
-  private beat(): { beat: number; into: number } {
-    return { beat: Math.floor(this.vamp / BEAT) % 4, into: (this.vamp % BEAT) / BEAT }
-  }
-
-  /** How strong the metronome's tick is now: 1 on the beat, fading through it. */
+  /** How strong the vamp's metronome tick is now: 1 on the beat, fading through it. */
   tick(): number {
-    return this.cue > 0 ? Math.exp(-this.beat().into * 4) : 0
-  }
-
-  /**
-   * The vamp's energy at a point of the spectrum: the band of each tool that
-   * waits on the person pulses on every beat, the bar's first beat the
-   * strongest, over a low hum between beats; once the wait runs long, the
-   * pulses shrink and the hum goes.
-   */
-  private vampAt(x: number): number {
-    const { beat, into } = this.beat()
-    const groove = 1 - Math.max(0, Math.min(1, (this.vamp - BORED) / BORED_FADE))
-    const pulse = (0.25 + 0.45 * groove) * (beat === 0 ? 1 : 0.7) * Math.exp(-into * 4) + 0.12 * groove
-    let energy = 0
-    for (let i = 0; i < N; i++) if (this.cued[i]! > 0) energy += pulse * bump(x - SOURCES[i]!.at, SIGMA)
-    return energy
-  }
-
-  /** The idle show's energy at a point of the spectrum: its scenes, crossfading. */
-  private idleAt(x: number): number {
-    const [swell, rain, scanner] = this.scene
-    let energy = 0
-    if (swell! > 0) energy += swell! * drift(x, this.show)
-    if (rain! > 0) energy += 0.15 * rain! * drift(x, this.show)
-    for (const drop of this.drops) energy += drop.energy * bump(x - drop.x, 0.022)
-    if (scanner! > 0) energy += 0.5 * scanner! * bump(x - (0.5 - 0.5 * Math.cos(cycle(this.show, SCAN))), 0.035)
-    return energy
+    return this.vamp.tick()
   }
 
   /** How often the shows want a frame while the music rests. */
   showMs(): number {
-    return this.isResting() && this.quietFor >= DROWSY ? DROWSY_MS : SHOW_MS
+    return this.isResting() && this.idleShow.quietFor >= DROWSY ? DROWSY_MS : SHOW_MS
   }
 
   /** Nothing playing and nothing left to fade. */
   isQuiet(): boolean {
-    return this.isResting() && this.idle === 0
+    return this.isResting() && this.idleShow.isQuiet()
   }
 
   /** Nothing playing and nothing left to fade but the idle show. */
   isResting(): boolean {
-    return this.isCalm() && this.asks.size === 0 && this.cue === 0
+    return this.isCalm() && this.vamp.isQuiet()
   }
 
   /**
@@ -595,22 +421,21 @@ export class Spectrum {
   isCalm(): boolean {
     return (
       this.level.every(l => l === 0) &&
-      this.held.every((h, i) => h <= this.hushed[i]!) &&
+      this.held.every((h, i) => h <= this.vamp.hushed[i]!) &&
       this.thinking === 0 &&
       this.mind === 0 &&
-      this.sweep === undefined &&
       this.crash === 0 &&
       this.flash === 0 &&
       !this.demo.isPlaying &&
-      this.notes.length === 0 &&
-      this.rewinding === 0 &&
-      this.gauge === this.fill &&
-      this.calls.every(call => call.running > 0 && call.running <= this.waitingOn(call))
+      this.calls.every(call => call.running > 0 && call.running <= this.vamp.waitingOn(this.now, call)) &&
+      this.keys.isCalm() &&
+      this.sweep.isCalm() &&
+      this.meter.isCalm()
     )
   }
 
   /** Whether a call is still running, not waiting on the person. */
   isRunning(call: Call): boolean {
-    return call.running > this.waitingOn(call)
+    return call.running > this.vamp.waitingOn(this.now, call)
   }
 }

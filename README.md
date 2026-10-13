@@ -127,7 +127,7 @@ claude plugin test .           # tests/*.test.ts and *.test.tsx against the engi
 ```
 
 - `hooks/engine/`: the music and its drawing, a file for each part. It's pure, so it's easy to test.
-  - The music: `spectrum.ts`, each instrument's energy and the shows over it; `step.ts` plays a model request on it as it streams, `demo.ts` plays `/viz demo`, and `ensemble.ts` gives each subagent a spectrum of its own.
+  - The music: `spectrum.ts`, each instrument's energy, and the parts over it: `keys.ts`, the person's typing; `sweep.ts`, the sweeps up and down it; `vamp.ts`, the asks put to the person and the vamp while they wait; `meter.ts`, the context meter; and `idle.ts`, the idle show. `step.ts` plays a model request on it as it streams, `demo.ts` plays `/viz demo`, and `ensemble.ts` gives each subagent a spectrum of its own.
   - The drawing: `bars.ts` draws a spectrum as bars, `channels.ts` the subagents' beside them, and `board.ts` the two together; `names.ts` and `trail.ts` draw the names over and beside them, and `doctor.ts` `/viz doctor`'s swatches.
   - What they're made of: `sources.ts`, the instruments; `color.ts`, the themes and backgrounds; `cells.ts`, Raster cells; `math.ts`, fades, waves and noise.
 - `hooks/viz.ts`: the plugin's decisions: your saved settings, what each `/viz` command does, when the band shows, how fast the frames run. Also pure.
