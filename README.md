@@ -96,7 +96,7 @@ Its hooks, in `hooks/register.tsx` and `hooks/music.ts`:
 
 | Hook | What it does |
 | --- | --- |
-| `session.start` | registers `/viz`, restores your `/viz` settings, reads Claude Code's theme and `COLORFGBG` to tell a light background, reads the context window's fill, and lists the session's subagents, to give those still at work after a reload their channels back |
+| `session.start` | registers `/viz`, restores your `/viz` settings, asks whether its pane is still open, reads Claude Code's theme and `COLORFGBG` to tell a light background, reads the context window's fill, and lists the session's subagents, to give those still at work after a reload their channels back |
 | `prompt.edit` | plays your keys on a band that's already up |
 | `prompt.submit` | a sweep up the spectrum |
 | `turn.step` | plays the response as it streams: thinking, text, tool calls, their arguments; a subagent's in its channel |
@@ -111,7 +111,7 @@ Its hooks, in `hooks/register.tsx` and `hooks/music.ts`:
 | `ui.close` | notes that the pane closed |
 | `command.run` (`viz`) | answers `/viz` |
 
-- **Reads:** the environment variables `COLORFGBG`, to tell a light background, and, for `/viz doctor`, `TERM`, `COLORTERM` and `TERM_PROGRAM`; Claude Code's theme setting; the session's context usage; the session's subagents, with their names, task descriptions, types and whether they're at work.
+- **Reads:** the environment variables `COLORFGBG`, to tell a light background, and, for `/viz doctor`, `TERM`, `COLORTERM` and `TERM_PROGRAM`; Claude Code's theme setting; the session's context usage; the session's subagents, with their names, task descriptions, types and whether they're at work; whether its own pane is open.
 - **Writes:** your `/viz` settings in the plugin's own store, and the same settings in its own state with whether it's playing and whether its pane is open.
 - **Sends:** nothing.
 

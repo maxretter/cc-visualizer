@@ -77,6 +77,19 @@ async function publish($: EngineInterface, prefs: Prefs) {
   await update($, place, () => prefs.place)
 }
 
+/**
+ * Whether the pane is open and drawn, as the engine lists it, published for
+ * the band, which steps aside for it. Not as this plugin last said: a pane an
+ * unload closed never tells it, and one opened may wait undrawn.
+ */
+async function notePane($: EngineInterface) {
+  const isDrawn = await $.ui.panes().then(
+    panes => panes.some(pane => pane.id === PANE && pane.isPlaced),
+    () => false,
+  )
+  if ((await read($, isPaneOpen)) !== isDrawn) await update($, isPaneOpen, () => isDrawn)
+}
+
 export const register: Register = on => {
   const stage = new Stage(PANE)
   const { spectrum, ensemble, sites } = stage
@@ -159,6 +172,8 @@ export const register: Register = on => {
     await $.command.register({ name: 'viz', description: 'Music visualizer for what Claude is doing', argumentHint: HINT, immediate: true })
     stage.prefs = prefsFrom(await $.store.get('prefs'))
     await publish($, stage.prefs)
+    // The pane as the engine has it: the state outlives a reload, and an unload's close never reached this plugin.
+    await notePane($).catch(() => {})
     // The terminal's background, as Claude Code's theme and the terminal tell it.
     stage.backdrop = {
       theme: await themeOf($),
@@ -365,11 +380,13 @@ export const register: Register = on => {
     )
   })
 
+  // The pane closed, by /viz, the person or another plugin: the band is back,
+  // unless the engine still lists the pane (a hook kept it open).
   on('ui.close', async ($, e, next) => {
     const closed = await next(e)
     if (e.id === PANE) {
       sites.delete(PANE)
-      await update($, isPaneOpen, () => false)
+      await notePane($)
     }
 
     return closed
@@ -413,17 +430,19 @@ export const register: Register = on => {
 
     let { text } = outcome
     if (outcome.pane === 'open') {
-      await update($, isPaneOpen, () => true)
-      const opened = await $.ui.open({ id: PANE, title: 'Visualizer', rows: 14 })
-      if (!opened.isPlaced) text = PANE_WAITS
+      // The band steps aside once the pane is drawn, not before: an open
+      // refused, or one that waits undrawn, leaves it where it was.
+      try {
+        const opened = await $.ui.open({ id: PANE, title: 'Visualizer', rows: 14 })
+        if (!opened.isPlaced) text = PANE_WAITS
+      } finally {
+        await notePane($)
+      }
     } else if (outcome.pane === 'close') {
       await $.ui.close({ id: PANE })
-      if (outcome.isOff) {
-        sites.clear()
-      } else {
-        sites.delete(PANE)
-        await update($, isPaneOpen, () => false)
-      }
+      if (outcome.isOff) sites.clear()
+      else sites.delete(PANE)
+      await notePane($)
     }
     if (outcome.isDemo) spectrum.playDemo(ensemble)
     const before = stage.prefs

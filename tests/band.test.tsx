@@ -103,9 +103,33 @@ describe('the pane', () => {
     await ui.unmount()
   })
 
-  test('a pane the terminal has no room for yet says so', async ($, on) => {
-    const { ui, viz } = await staged($, on, { hasRoom: false })
+  test('a pane the terminal has no room for yet says so, and the band stays up meanwhile', async ($, on) => {
+    const { clock, ui, viz } = await staged($, on, { hasRoom: false })
     expect((await viz('pane')).text).toBe(PANE_WAITS)
+    await clock.advance(100)
+    expect(await ui.find({ type: 'Raster', key: 'band' })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('a pane refused leaves the band up', async ($, on) => {
+    const { clock, ui, viz } = await staged($, on, { isPaneRefused: true })
+    await viz('pane').catch(() => undefined)
+    await clock.advance(100)
+    expect(await ui.find({ type: 'Raster', key: 'band' })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('a pane an unload dropped holds the band aside no longer once the plugin starts again', async ($, on) => {
+    const { clock, ui, viz, unload } = await staged($, on)
+    await viz('pane')
+    await clock.advance(100)
+    expect(await ui.find({ type: 'Raster', key: 'band' })).toBeUndefined()
+
+    // The pane goes with an unload, which this plugin never hears of; the state outlives the reload.
+    unload()
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+    await clock.advance(100)
+    expect(await ui.find({ type: 'Raster', key: 'band' })).toBeDefined()
     await ui.unmount()
   })
 })

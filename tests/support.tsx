@@ -1,7 +1,7 @@
 // Helpers the tests share: reading Raster cells, a session staged with the
 // plugin in it, and the drawings the tests mount.
 
-import type { ConfigRow, On, SessionUsage, ToolCallResult } from 'claude-code'
+import type { ConfigRow, On, SessionUsage, ToolCallResult, UiPane } from 'claude-code'
 import { mock } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
@@ -61,9 +61,17 @@ export const prefsStore = (on: On, initial?: Record<string, unknown>) => {
 
 /**
  * How `staged` sets the session up: the `/viz` mode, the context, the
- * environment, Claude Code's theme, and whether the terminal has room for the pane.
+ * environment, Claude Code's theme, whether the terminal has room for the
+ * pane, and whether a hook refuses to open it.
  */
-export type Stage = { mode?: string; context?: () => object; env?: Record<string, string>; theme?: string; hasRoom?: boolean }
+export type Stage = {
+  mode?: string
+  context?: () => object
+  env?: Record<string, string>
+  theme?: string
+  hasRoom?: boolean
+  isPaneRefused?: boolean
+}
 
 /** How red the bars are: red over green, on average over the cells drawn. */
 export const redness = (cells: string, columns = 80) => {
@@ -88,7 +96,7 @@ export const thirds = (cells: string, columns = 80) => {
  * its frames kept: tool calls run until the test finishes them, each check
  * beneath asks, and the context, the environment and the theme are as given.
  */
-export const staged = async ($: Engine, on: On, { mode = 'always', context, env = {}, theme, hasRoom = true }: Stage = {}) => {
+export const staged = async ($: Engine, on: On, { mode = 'always', context, env = {}, theme, hasRoom = true, isPaneRefused = false }: Stage = {}) => {
   const clock = mock.clock(on)
   mock.store(on)
   mock.env(on, env)
@@ -134,13 +142,22 @@ export const staged = async ($: Engine, on: On, { mode = 'always', context, env 
   on('prompt.submit', ($, e) => ({ text: e.text }))
   on('turn.complete', ($, e) => ({ text: e.answer }))
   on('session.measure', ($, e) => ({ changed: e.changed }))
-  on('ui.open', () => ({ value: hasRoom ? { isPlaced: true as const } : { isPlaced: false as const, reason: 'too narrow' } }))
+  // The panes open, as the engine lists them: placed if there was room, until closed.
+  const panes = new Map<string, UiPane>()
+  on('ui.open', ($, e) => {
+    if (isPaneRefused) return { deny: 'refused' }
+    panes.set(e.id, { id: e.id, title: e.title ?? e.id, isShown: true, isFocused: false, isPlaced: hasRoom })
+
+    return { value: hasRoom ? { isPlaced: true as const } : { isPlaced: false as const, reason: 'too narrow' } }
+  })
   let closes = 0
-  on('ui.close', () => {
+  on('ui.close', ($, e) => {
     closes += 1
+    panes.delete(e.id)
 
     return { value: undefined }
   })
+  on('ui.panes', () => ({ value: [...panes.values()] }))
   on('prompt.edit', ($, e) => ({
     text: e.text.slice(0, e.start) + e.inputText + e.text.slice(e.end),
     cursor: e.start + e.inputText.length,
@@ -172,6 +189,8 @@ export const staged = async ($: Engine, on: On, { mode = 'always', context, env 
     },
     /** How many times a pane was closed. */
     closes: () => closes,
+    /** The pane goes as an unload drops it: gone from the engine's list, no `ui.close` raised. */
+    unload: (id = 'viz') => panes.delete(id),
   }
 }
 
