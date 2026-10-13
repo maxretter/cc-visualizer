@@ -117,13 +117,13 @@ export const staged = async ($: Engine, on: On, { mode = 'always', context, env 
     return <Text>{e.props.hint}</Text>
   })
   // The frames that reached the screen, and how many were sent, by drawing;
-  // while a dialog covers the band, none reach it.
+  // while a dialog covers a drawing, none reach it.
   const drawn = new Map<string, string>()
   const blits = new Map<string, number>()
-  let isCovered = false
+  let covered: (key: string) => boolean = () => false
   on('ui.blit', ($, e) => {
     blits.set(e.key, (blits.get(e.key) ?? 0) + 1)
-    if (isCovered) return { value: { deny: 'covered by a dialog' } }
+    if (covered(e.key)) return { value: { deny: 'covered by a dialog' } }
     if ('cells' in e) drawn.set(e.key, e.cells)
 
     return { value: {} }
@@ -183,9 +183,9 @@ export const staged = async ($: Engine, on: On, { mode = 'always', context, env 
     blits: (key?: string) => (key === undefined ? [...blits.values()].reduce((sum, n) => sum + n, 0) : (blits.get(key) ?? 0)),
     /** Ends a running call, as the tool answered. */
     finish: (id: string, ran: ToolCallResult = { result: 'done' }) => running.get(id)?.(ran),
-    /** A dialog opens over the band, or closes. */
-    cover: (is: boolean) => {
-      isCovered = is
+    /** A dialog opens over the drawings, or only the one of `key`, or closes. */
+    cover: (is: boolean, key?: string) => {
+      covered = is ? drawing => key === undefined || drawing === key : () => false
     },
     /** How many times a pane was closed. */
     closes: () => closes,

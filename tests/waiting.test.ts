@@ -5,7 +5,7 @@ import { FRAME_MS } from '../hooks/engine/math'
 import { clockText } from '../hooks/engine/names'
 import { BEAT, GRACE, Spectrum } from '../hooks/engine/spectrum'
 import { trail } from '../hooks/engine/trail'
-import { staged, text } from './support'
+import { pane, staged, text } from './support'
 
 describe('waiting on you', () => {
   /** Plays `ms` of music, a frame at a time. */
@@ -128,6 +128,45 @@ describe('waiting on you', () => {
     expect(label()).not.toContain('waiting on you')
     finish('t1')
     await call
+    await ui.unmount()
+  })
+
+  test('the pane shows the wait while a dialog covers the band', async ($, on) => {
+    const { clock, ui, viz, cells, cover, finish } = await staged($, on)
+    await viz('pane')
+    const drawn = await $.ui.mount(pane)
+    // The permission dialog takes the band's place: its frames are refused, the pane's land.
+    cover(true, 'band')
+    const call = $.tool.call({ tool: 'Bash', command: 'ls', tool_use_id: 't1' })
+    await clock.settle()
+    await $.tool.check({ tool: 'Bash', input: { command: 'ls' }, tool_use_id: 't1' })
+    await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: { command: 'ls' } })
+    await clock.advance(3000)
+    expect(text(cells('pane'), 80)[0]).toMatch(/^\s*waiting on you/)
+    finish('t1')
+    await call
+    await drawn.unmount()
+    await ui.unmount()
+  })
+
+  test('the band is back at once when the call it waited on is answered', async ($, on) => {
+    const { clock, ui, cells, cover, finish } = await staged($, on)
+    const call = $.tool.call({ tool: 'Bash', command: 'ls', tool_use_id: 't1' })
+    await clock.settle()
+    await $.tool.check({ tool: 'Bash', input: { command: 'ls' }, tool_use_id: 't1' })
+    await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: { command: 'ls' } })
+    await clock.advance(1000)
+    // The dialog covers the band: its frames are refused, and held.
+    cover(true)
+    await clock.advance(2000)
+    const covered = cells()
+
+    // Allowed: the call runs and ends, the dialog goes, and a frame lands well within a retry.
+    finish('t1')
+    await call
+    cover(false)
+    await clock.advance(100)
+    expect(cells()).not.toBe(covered)
     await ui.unmount()
   })
 
