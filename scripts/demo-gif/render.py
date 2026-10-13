@@ -7,7 +7,9 @@ braille are drawn as shapes, so the bars are crisp whatever the font has.
 usage: python render.py IN.cast OUT.gif [--start -1.5] [--seconds 17] [--fps 12] [--size 16] [--rows FIRST:LAST]
 
 --start is in seconds from when the command is typed; --rows crops to those
-screen rows (inclusive), found on their own when not given.
+screen rows (inclusive). Not given, the crop is the band and the prompt box,
+and each frame draws only those, wherever they are in it, so nothing else on
+the screen (the welcome banner, the transcript) gets into the GIF.
 """
 import argparse
 import json
@@ -21,6 +23,8 @@ BOLD = '/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf'
 BACKGROUND = (24, 24, 27)
 FOREGROUND = (212, 212, 216)
 PADDING = 12
+# The band's most rows, as register.tsx draws it above the prompt.
+BAND_ROWS = 5
 # The 16 colors by pyte's names for them.
 NAMED = {
     'black': (0, 0, 0),
@@ -91,18 +95,20 @@ class Player:
 
 
 def band_rows(screen):
-    """The band's first row through the prompt box's last: the prompt box's
-    borders around its `❯` line, and the rows drawn just above it."""
+    """The band's first row and the prompt box's last, or None with no prompt
+    box on screen. The box is its borders around the `❯` line. The band ends
+    just above it and starts at the row the engine marks `[-]` at its right,
+    looked for no higher than the band's rows and the gap under them, so the
+    rows over it (the transcript, the welcome banner) are never taken. With
+    no band there, the box alone."""
     text = screen.display
     for border in range(len(text) - 2):
         if text[border].startswith('─' * 10) and '❯' in text[border + 1] and text[border + 2].startswith('─' * 10):
-            first = border - 1
-            while first > 0 and not text[first].strip():
-                first -= 1
-            while first > 0 and text[first - 1].strip():
-                first -= 1
-            return first, border + 2
-    raise SystemExit('No prompt box on screen: give --rows.')
+            for first in range(border - 1, max(border - 2 - BAND_ROWS, -1), -1):
+                if '[-]' in text[first]:
+                    return first, border + 2
+            return border, border + 2
+    return None
 
 
 font = ImageFont.truetype(FONT, args.size)
@@ -115,7 +121,12 @@ baseline = (h - ascent - descent) // 2
 if args.rows:
     first, last = map(int, args.rows.split(':'))
 else:
-    first, last = band_rows(Player().at(typed + 5))
+    found = band_rows(Player().at(typed + 5))
+    if found is None:
+        raise SystemExit('No prompt box on screen: give --rows.')
+    first, last = found
+    if last - first == 2:
+        print('No band over the prompt box (is /viz pos below saved?): the GIF shows the prompt alone.')
 columns = header['width']
 size = (columns * w + 2 * PADDING, (last - first + 1) * h + 2 * PADDING)
 
@@ -151,10 +162,10 @@ def cell(draw, x, y, char):
         draw.text((x, y + baseline), char.data, font=bold if char.bold else font, fill=fg)
 
 
-def frame(screen):
+def frame(screen, rows):
     image = Image.new('RGB', size, BACKGROUND)
     draw = ImageDraw.Draw(image)
-    for row in range(first, last + 1):
+    for row in rows:
         line = screen.buffer[row]
         for column in range(columns):
             cell(draw, PADDING + column * w, PADDING + (row - first) * h, line[column])
@@ -171,9 +182,17 @@ encode = subprocess.Popen(
     stdin=subprocess.PIPE,
 )
 player = Player()
+rows = range(first, last + 1)
 count = round(args.seconds * args.fps)
 for n in range(count):
-    encode.stdin.write(frame(player.at(typed + args.start + n / args.fps)).tobytes())
+    screen = player.at(typed + args.start + n / args.fps)
+    if not args.rows and (found := band_rows(screen)):
+        # Only the band and the box as they stand in this frame: a row of the
+        # crop that holds something else as they move (the transcript, the
+        # hint, a list of commands) stays blank. A frame caught mid-redraw,
+        # with no box, keeps the last one's rows.
+        rows = range(max(first, found[0]), min(last, found[1]) + 1)
+    encode.stdin.write(frame(screen, rows).tobytes())
 encode.stdin.close()
 if encode.wait() != 0:
     raise SystemExit('ffmpeg failed')
