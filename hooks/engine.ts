@@ -280,22 +280,8 @@ export class Spectrum {
   private crash = 0
   private sweep: number | undefined
   private sweepDirection = 1
-  /** The demo: how long it has left, how long it is, and the next sixteenth its drums play. */
-  private demo = 0
-  private demoLength = 0
-  private demoNext = 0
-  private isDemoThinking = false
-  private demoCall: { call: Call; endAt: number } | undefined
-  /** The demo's subagents: the ensemble they join, and how far along each is. */
-  private demoEnsemble: Ensemble | undefined
-  private demoParts: DemoPart[] = []
-  /**
-   * The demo subagent whose transcript the demo has opened, by its voice's id,
-   * which the drawings put in focus as they do the one the person opens; none
-   * for the main conversation's. And the next of its views.
-   */
-  demoView: string | undefined
-  private demoViews = 0
+  /** The demo, played on this spectrum, drawing on its chances. */
+  private readonly demo = new Demo(this, this.rand)
   /** The latest tool calls, oldest first, while their names show. */
   readonly calls: Call[] = []
   /** Tool calls put to the person, until they are answered. */
@@ -513,16 +499,17 @@ export class Spectrum {
 
   /** Plays the demo, `ms` long; with an `ensemble`, its subagents join it, each in a channel of its own. */
   playDemo(ensemble?: Ensemble, ms = DEMO) {
-    // A demo played again over one still playing: its subagents end first.
-    this.finishParts()
-    this.demo = ms
-    this.demoLength = ms
-    this.demoNext = 0
-    this.demoEnsemble = ensemble
-    this.demoParts = ensemble === undefined ? [] : DEMO_AGENTS.map(agent => ({ agent, next: 0, running: [], isThinking: false, isDone: false }))
-    this.demoView = undefined
-    this.demoViews = 0
+    this.demo.play(ensemble, ms)
     this.kick()
+  }
+
+  /**
+   * The demo subagent whose transcript the demo has opened, by its voice's id,
+   * which the drawings put in focus as they do the one the person opens; none
+   * for the main conversation's.
+   */
+  get demoView(): string | undefined {
+    return this.demo.view
   }
 
   /** Moves the music on by `elapsed`: its clocks by all of it, the animation by up to `MAX_STEP`. */
@@ -531,7 +518,7 @@ export class Spectrum {
     const ms = Math.min(passed, MAX_STEP)
     this.now += passed
     this.dt = ms
-    if (this.demo > 0) this.sequence(ms)
+    if (this.demo.isPlaying) this.demo.step(ms)
     const t = this.now
     this.cued.fill(0)
     for (const ask of this.asks) if (this.isCued(ask)) this.cued[INDEX[ask.source]] = this.cued[INDEX[ask.source]]! + 1
@@ -723,7 +710,7 @@ export class Spectrum {
       this.sweep === undefined &&
       this.crash === 0 &&
       this.flash === 0 &&
-      this.demo === 0 &&
+      !this.demo.isPlaying &&
       this.notes.length === 0 &&
       this.rewinding === 0 &&
       this.gauge === this.fill &&
@@ -734,108 +721,6 @@ export class Spectrum {
   /** Whether a call is still running, not waiting on the person. */
   isRunning(call: Call): boolean {
     return call.running > this.waitingOn(call)
-  }
-
-  /**
-   * The demo, `ms` on: a spell of thinking, then the drum machine: kick, snare,
-   * hats, a melody, fills. Streams come in as a rate, so as much over `ms` as a
-   * frame's worth for each frame it spans.
-   */
-  private sequence(ms: number) {
-    this.demo = Math.max(0, this.demo - ms)
-    const elapsed = this.demoLength - this.demo
-    const frames = ms / FRAME_MS
-    if (elapsed < DEMO_THINK && this.demo > 0) {
-      if (!this.isDemoThinking) {
-        this.isDemoThinking = true
-        this.beginThinking()
-      }
-      this.stream('think', 12 * this.rand() * frames)
-      return
-    }
-    if (this.isDemoThinking) {
-      this.isDemoThinking = false
-      this.endThinking()
-    }
-    const drums = elapsed - DEMO_THINK
-    // The melody plays through the first ten sixteenths of each bar.
-    if (drums >= 0 && drums % (16 * SIXTEENTH) < 10 * SIXTEENTH) this.stream('text', (6 + 6 * Math.sin(cycle(drums, 690))) * frames)
-    if (this.demoCall !== undefined && (elapsed >= this.demoCall.endAt || this.demo === 0)) {
-      this.endCall(this.demoCall.call)
-      this.demoCall = undefined
-    }
-    // Each sixteenth the step reached: hats on every one, the kick on the beat,
-    // the snare halfway through it, and a tool between.
-    for (; this.demoNext * SIXTEENTH <= drums; this.demoNext++) {
-      const n = this.demoNext
-      this.hit('args', 0.21)
-      if (n % 4 === 0) this.hit('think')
-      if (n % 4 === 2) this.hit('bash', 0.8)
-      if (n % 2 === 1 && this.demoCall === undefined && this.demo > 2 * SIXTEENTH) {
-        const call = this.startCall(DEMO_TOOLS[Math.floor(n / 2) % DEMO_TOOLS.length]!)
-        this.demoCall = { call, endAt: elapsed + DEMO_CALL }
-      }
-    }
-    for (const part of this.demoParts) this.playPart(part, drums, frames)
-    // Each view the step reached: a subagent's transcript opened, or the main conversation's again.
-    for (; this.demoViews < DEMO_VIEWS.length && DEMO_VIEWS[this.demoViews]![0] <= drums; this.demoViews++) {
-      const name = DEMO_VIEWS[this.demoViews]![1]
-      this.demoView = this.demoParts.find(part => part.agent.name === name)?.voice?.id
-    }
-    if (this.demo === 0) {
-      this.finishParts()
-      this.demoView = undefined
-      this.cymbal()
-    }
-  }
-
-  /**
-   * A demo subagent, `drums` into the drums: it joins, thinks, makes its calls
-   * (each its arguments written, then a held note), writes its answer, and ends.
-   */
-  private playPart(part: DemoPart, drums: number, frames: number) {
-    const { agent } = part
-    if (part.isDone || this.demoEnsemble === undefined) return
-    if (part.voice === undefined) {
-      if (drums < agent.joins) return
-      part.voice = this.demoEnsemble.join(`demo:${agent.name}`, { name: agent.name })
-      part.voice.spectrum.beginThinking()
-      part.isThinking = true
-    }
-    const { spectrum } = part.voice
-    for (let i = part.running.length - 1; i >= 0; i--) {
-      if (drums < part.running[i]!.endAt) continue
-      spectrum.endCall(part.running[i]!.call)
-      part.running.splice(i, 1)
-    }
-    if (part.isThinking) spectrum.stream('think', 10 * this.rand() * frames)
-    for (; part.next < agent.calls.length && agent.calls[part.next]![0] <= drums; part.next++) {
-      const [, tool, ms] = agent.calls[part.next]!
-      if (part.isThinking) {
-        part.isThinking = false
-        spectrum.endThinking()
-      }
-      spectrum.stream('args', 30)
-      part.running.push({ call: spectrum.startCall(tool), endAt: drums + ms })
-    }
-    if (drums >= agent.ends - DEMO_ANSWER && part.running.length === 0) spectrum.stream('text', (5 + 4 * this.rand()) * frames)
-    if (drums >= agent.ends) this.finishPart(part)
-  }
-
-  /** A demo subagent ends: its calls return, and it answers. */
-  private finishPart(part: DemoPart) {
-    if (part.voice === undefined || part.isDone) return
-    for (const { call } of part.running) part.voice.spectrum.endCall(call)
-    part.running.length = 0
-    if (part.isThinking) part.voice.spectrum.endThinking()
-    part.isThinking = false
-    this.demoEnsemble?.end(part.voice.id, 'answer')
-    part.isDone = true
-  }
-
-  /** Every demo subagent still at work ends: the demo is over, or plays again. */
-  private finishParts() {
-    for (const part of this.demoParts) this.finishPart(part)
   }
 }
 
@@ -2043,4 +1928,154 @@ function voiceLabel(words: Uint32Array, columns: number, start: number, width: n
     at += spin
   }
   write(words, columns, 0, at, act.text.slice(0, left), nameColorOf(theme, act, act.strength * shown, tone))
+}
+
+/**
+ * The demo, played on a spectrum without a turn: a spell of thinking, then a
+ * drum machine of tool calls; with an ensemble, two subagents join it, each in
+ * a channel of its own, and their transcripts are opened in turn.
+ */
+export class Demo {
+  /** How long it has left, how long it is, and the next sixteenth its drums play. */
+  private left = 0
+  private length = 0
+  private next = 0
+  private isThinking = false
+  private call: { call: Call; endAt: number } | undefined
+  /** Its subagents: the ensemble they join, and how far along each is. */
+  private ensemble: Ensemble | undefined
+  private parts: DemoPart[] = []
+  /**
+   * The subagent whose transcript it has opened, by its voice's id, which the
+   * drawings put in focus as they do the one the person opens; none for the
+   * main conversation's. And the next of its views.
+   */
+  view: string | undefined
+  private views = 0
+
+  constructor(
+    private readonly spectrum: Spectrum,
+    private readonly rand: () => number,
+  ) {}
+
+  /** Whether it is playing. */
+  get isPlaying(): boolean {
+    return this.left > 0
+  }
+
+  /** Plays it from the start, `ms` long; with an `ensemble`, its subagents join it. */
+  play(ensemble: Ensemble | undefined, ms: number) {
+    // A demo played again over one still playing: its subagents end first.
+    this.finishParts()
+    this.left = ms
+    this.length = ms
+    this.next = 0
+    this.ensemble = ensemble
+    this.parts = ensemble === undefined ? [] : DEMO_AGENTS.map(agent => ({ agent, next: 0, running: [], isThinking: false, isDone: false }))
+    this.view = undefined
+    this.views = 0
+  }
+
+  /**
+   * The demo, `ms` on: a spell of thinking, then the drum machine: kick, snare,
+   * hats, a melody, fills. Streams come in as a rate, so as much over `ms` as a
+   * frame's worth for each frame it spans.
+   */
+  step(ms: number) {
+    const { spectrum } = this
+    this.left = Math.max(0, this.left - ms)
+    const elapsed = this.length - this.left
+    const frames = ms / FRAME_MS
+    if (elapsed < DEMO_THINK && this.left > 0) {
+      if (!this.isThinking) {
+        this.isThinking = true
+        spectrum.beginThinking()
+      }
+      spectrum.stream('think', 12 * this.rand() * frames)
+      return
+    }
+    if (this.isThinking) {
+      this.isThinking = false
+      spectrum.endThinking()
+    }
+    const drums = elapsed - DEMO_THINK
+    // The melody plays through the first ten sixteenths of each bar.
+    if (drums >= 0 && drums % (16 * SIXTEENTH) < 10 * SIXTEENTH) spectrum.stream('text', (6 + 6 * Math.sin(cycle(drums, 690))) * frames)
+    if (this.call !== undefined && (elapsed >= this.call.endAt || this.left === 0)) {
+      spectrum.endCall(this.call.call)
+      this.call = undefined
+    }
+    // Each sixteenth the step reached: hats on every one, the kick on the beat,
+    // the snare halfway through it, and a tool between.
+    for (; this.next * SIXTEENTH <= drums; this.next++) {
+      const n = this.next
+      spectrum.hit('args', 0.21)
+      if (n % 4 === 0) spectrum.hit('think')
+      if (n % 4 === 2) spectrum.hit('bash', 0.8)
+      if (n % 2 === 1 && this.call === undefined && this.left > 2 * SIXTEENTH) {
+        const call = spectrum.startCall(DEMO_TOOLS[Math.floor(n / 2) % DEMO_TOOLS.length]!)
+        this.call = { call, endAt: elapsed + DEMO_CALL }
+      }
+    }
+    for (const part of this.parts) this.playPart(part, drums, frames)
+    // Each view the step reached: a subagent's transcript opened, or the main conversation's again.
+    for (; this.views < DEMO_VIEWS.length && DEMO_VIEWS[this.views]![0] <= drums; this.views++) {
+      const name = DEMO_VIEWS[this.views]![1]
+      this.view = this.parts.find(part => part.agent.name === name)?.voice?.id
+    }
+    if (this.left === 0) {
+      this.finishParts()
+      this.view = undefined
+      spectrum.cymbal()
+    }
+  }
+
+  /**
+   * A demo subagent, `drums` into the drums: it joins, thinks, makes its calls
+   * (each its arguments written, then a held note), writes its answer, and ends.
+   */
+  private playPart(part: DemoPart, drums: number, frames: number) {
+    const { agent } = part
+    if (part.isDone || this.ensemble === undefined) return
+    if (part.voice === undefined) {
+      if (drums < agent.joins) return
+      part.voice = this.ensemble.join(`demo:${agent.name}`, { name: agent.name })
+      part.voice.spectrum.beginThinking()
+      part.isThinking = true
+    }
+    const { spectrum } = part.voice
+    for (let i = part.running.length - 1; i >= 0; i--) {
+      if (drums < part.running[i]!.endAt) continue
+      spectrum.endCall(part.running[i]!.call)
+      part.running.splice(i, 1)
+    }
+    if (part.isThinking) spectrum.stream('think', 10 * this.rand() * frames)
+    for (; part.next < agent.calls.length && agent.calls[part.next]![0] <= drums; part.next++) {
+      const [, tool, ms] = agent.calls[part.next]!
+      if (part.isThinking) {
+        part.isThinking = false
+        spectrum.endThinking()
+      }
+      spectrum.stream('args', 30)
+      part.running.push({ call: spectrum.startCall(tool), endAt: drums + ms })
+    }
+    if (drums >= agent.ends - DEMO_ANSWER && part.running.length === 0) spectrum.stream('text', (5 + 4 * this.rand()) * frames)
+    if (drums >= agent.ends) this.finishPart(part)
+  }
+
+  /** A demo subagent ends: its calls return, and it answers. */
+  private finishPart(part: DemoPart) {
+    if (part.voice === undefined || part.isDone) return
+    for (const { call } of part.running) part.voice.spectrum.endCall(call)
+    part.running.length = 0
+    if (part.isThinking) part.voice.spectrum.endThinking()
+    part.isThinking = false
+    this.ensemble?.end(part.voice.id, 'answer')
+    part.isDone = true
+  }
+
+  /** Every demo subagent still at work ends: the demo is over, or plays again. */
+  private finishParts() {
+    for (const part of this.parts) this.finishPart(part)
+  }
 }
