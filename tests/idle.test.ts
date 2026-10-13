@@ -88,28 +88,32 @@ describe('idle', () => {
 
   test('no idle show while a subagent works, though the main loop rests; it comes once the subagent is done', async ($, on) => {
     on('agent.spawn', () => ({ model: 'claude-haiku-5-5', agentId: 'a1' }))
-    const { clock, ui, label } = await staged($, on)
-    await $.agent.spawn({
-      tool_use_id: 'spawn-scout',
-      prompt: 'Look around.',
-      description: 'Look for the handlers',
-      subagentType: 'Explore',
-      provider: { plugin: 'engine', tier: 'core' },
-      parentModel: 'claude-opus-5-5',
-      background: true,
-      fork: false,
-      name: 'scout',
-    })
-    await clock.advance(12_000)
-    expect(label()).toContain('scout')
-    expect(label()).not.toContain('idle')
+    // A band that stays up, for the idle show.
+    const { clock, ui, label } = await staged($, on, { mode: 'always' })
+    try {
+      await $.agent.spawn({
+        tool_use_id: 'spawn-scout',
+        prompt: 'Look around.',
+        description: 'Look for the handlers',
+        subagentType: 'Explore',
+        provider: { plugin: 'engine', tier: 'core' },
+        parentModel: 'claude-opus-5-5',
+        background: true,
+        fork: false,
+        name: 'scout',
+      })
+      await clock.advance(12_000)
+      expect(label()).toContain('scout')
+      expect(label()).not.toContain('idle')
 
-    await $.turn.complete({ reason: 'answer', answer: 'Found it.', durationMs: 1000, isAborted: false, turnId: 'u1', agentId: 'a1' })
-    await clock.advance(4000)
-    expect(label()).not.toContain('scout')
-    await clock.advance(8000)
-    expect(label()).toMatch(/^\s*idle/)
-    await ui.unmount()
+      await $.turn.complete({ reason: 'answer', answer: 'Found it.', durationMs: 1000, isAborted: false, turnId: 'u1', agentId: 'a1' })
+      await clock.advance(4000)
+      expect(label()).not.toContain('scout')
+      await clock.advance(8000)
+      expect(label()).toMatch(/^\s*idle/)
+    } finally {
+      await ui.unmount()
+    }
   })
 
   test('/viz idle toggles the show and remembers it', async ($, on) => {

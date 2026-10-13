@@ -90,21 +90,24 @@ describe('typing', () => {
     // typings (a plugin's own calls) leave it out.
     const prompt = $.prompt as unknown as { edit: (e: PromptEditInput) => Promise<PromptEditResult> }
     const edit = (inputText: string) => prompt.edit({ origin: { kind: 'composer' }, text: '', cursor: 0, start: 0, end: 0, inputText })
-    // Claude works: the band is up, and the keys play on it.
-    await clock.advance(3000)
-    const before = blits()
-    await edit('hi')
-    await clock.advance(200)
-    expect(blits()).toBeGreaterThan(before)
+    try {
+      // Claude works: the band is up, and the keys play on it.
+      await clock.advance(3000)
+      const before = blits()
+      await edit('hi')
+      await clock.advance(200)
+      expect(blits()).toBeGreaterThan(before)
 
-    // Claude is done and the band has gone: typing does not bring it back.
-    await ui.redraw(band(false).props)
-    await clock.advance(5000)
-    const after = blits()
-    await edit('there')
-    await clock.advance(1000)
-    expect(blits()).toBe(after)
-    await ui.unmount()
+      // Claude is done and the band has gone: typing does not bring it back.
+      await ui.redraw(band(false).props)
+      await clock.advance(5000)
+      const after = blits()
+      await edit('there')
+      await clock.advance(1000)
+      expect(blits()).toBe(after)
+    } finally {
+      await ui.unmount()
+    }
   })
 })
 
