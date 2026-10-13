@@ -1,8 +1,24 @@
+import type { On } from 'claude-code'
 import { describe, expect, mock, test } from 'claude-code/testing'
+import type { MockClock } from 'claude-code/testing'
 
 import { FRAME_MS } from '../hooks/engine/math'
 import { Spectrum } from '../hooks/engine/spectrum'
 import { band, staged } from './support'
+
+/**
+ * How many frames the plugin has drawn so far: each starts by reading the
+ * clock. Hooked before `mock.clock`, whose own hook answers the read.
+ */
+const counted = (on: On) => {
+  let reads = 0
+  on('clock.now', {}, ($, e, next) => {
+    reads += 1
+
+    return next(e)
+  })
+  return () => reads
+}
 
 describe('a band taken off screen', () => {
   test('a refused frame holds the band, and it comes back to life once frames land again', async ($, on) => {
@@ -74,6 +90,34 @@ describe('a band taken off screen', () => {
     expect(blits()).toBe(sent)
     await ui.unmount()
   })
+
+  test('behind a dialog, the frames run only as often as the band is tried, whatever plays', { timeoutMs: 20_000 }, async ($, on) => {
+    const frames = counted(on)
+    const { clock, ui, label, finish, cover } = await staged($, on)
+    const call = $.tool.call({ tool: 'Bash', command: 'rm -r build', tool_use_id: 't1' })
+    await clock.settle()
+    await $.tool.check({ tool: 'Bash', input: { command: 'rm -r build' }, tool_use_id: 't1' })
+    // The dialog asks, over the band, and goes unanswered for a minute while the vamp plays.
+    cover(true)
+    await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: { command: 'rm -r build' } })
+    await clock.advance(3000)
+    const before = frames()
+    await clock.advance(60_000)
+    // A frame a try, two a second: not the vamp's fifteen.
+    expect(frames() - before).toBeGreaterThan(100)
+    expect(frames() - before).toBeLessThan(130)
+
+    // It closes: the band is back within a try, at the vamp's pace.
+    cover(false)
+    await clock.advance(1000)
+    expect(label()).toMatch(/^\s*waiting on you/)
+    const back = frames()
+    await clock.advance(1000)
+    expect(frames() - back).toBeGreaterThan(10)
+    finish('t1')
+    await call
+    await ui.unmount()
+  })
 })
 
 describe('a reload', () => {
@@ -104,6 +148,7 @@ describe('a reload', () => {
     expect(await ui.find({ type: 'Raster', key: 'band' })).toBeDefined()
     await ui.unmount()
   })
+
 })
 
 describe('frames', () => {
@@ -117,6 +162,156 @@ describe('frames', () => {
     expect(blits('names')).toBeLessThan(0.75 * blits('mini'))
     finish('t1')
     await call
+    await ui.unmount()
+  })
+
+  test('in auto, the band steps aside once the work is done and its frames have stopped', async ($, on) => {
+    const { clock, ui, blits, finish } = await staged($, on, { mode: 'auto' })
+    const call = $.tool.call({ tool: 'Bash', command: 'make', tool_use_id: 't1' })
+    await clock.advance(500)
+    finish('t1')
+    await call
+    // Claude is done, but the music plays on as the bars fall: the band stays for it.
+    await ui.redraw(band(false).props)
+    expect(await ui.find({ type: 'Raster', key: 'band' })).toBeDefined()
+
+    await clock.advance(8000)
+    const sent = blits()
+    await clock.advance(1000)
+    expect(blits()).toBe(sent)
+    await ui.redraw(band(false).props)
+    expect(await ui.find({ type: 'Raster', key: 'band' })).toBeUndefined()
+    await ui.unmount()
+  })
+
+  test('no frames run where nothing draws: a -p run', async ($, on) => {
+    const frames = counted(on)
+    const clock = mock.clock(on)
+    mock.store(on)
+    on('session.start', ($, e) => ({ cwd: e.cwd }))
+    on('command.register', ($, e) => ({ value: { command: e.name } }))
+    on('prompt.submit', ($, e) => ({ text: e.text }))
+    on('tool.call', () => new Promise(() => {}))
+
+    await $.session.start({ cwd: '/', surface: null, isInteractive: false })
+    await $.prompt.submit({ text: 'make it', wait: false, origin: { kind: 'composer' } })
+    $.tool.call({ tool: 'Bash', command: 'make', tool_use_id: 't1' }).catch(() => {})
+    await clock.advance(2000)
+    expect(frames()).toBe(0)
+  })
+
+  test('in a terminal, the frames wait for a band to play on, and start as it comes up', async ($, on) => {
+    const frames = counted(on)
+    const clock = mock.clock(on)
+    mock.store(on)
+    on('session.start', ($, e) => ({ cwd: e.cwd }))
+    on('command.register', ($, e) => ({ value: { command: e.name } }))
+    on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+      const { Text } = $.ui.resolve(e)
+
+      return <Text>engine</Text>
+    })
+    on('ui.blit', () => ({ value: {} }))
+    on('tool.call', () => new Promise(() => {}))
+
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+    $.tool.call({ tool: 'Bash', command: 'make', tool_use_id: 't1' }).catch(() => {})
+    await clock.advance(1000)
+    expect(frames()).toBe(0)
+    // The music brings the band up, though Claude is not working by the props, and plays on it.
+    const ui = await $.ui.mount(band(false))
+    expect(await ui.find({ type: 'Raster', key: 'band' })).toBeDefined()
+    await clock.advance(1000)
+    expect(frames()).toBeGreaterThan(25)
+    await ui.unmount()
+  })
+
+  test('a ticker whose period is refused is started again, and the band plays on', async ($, on) => {
+    // The host refuses one period of the frames' timer, which ends it.
+    let isRefused = false
+    on('clock.every', { ms: FRAME_MS }, ($, e, next) => (isRefused ? { deny: 'busy' } : next(e)))
+    const { clock, ui, blits, finish } = await staged($, on)
+    const call = $.tool.call({ tool: 'Bash', command: 'make', tool_use_id: 't1' })
+    await clock.advance(500)
+    isRefused = true
+    await clock.advance(FRAME_MS)
+    isRefused = false
+    // The watchdog finds no frame since it last looked, and starts them again.
+    await clock.advance(4000)
+    const sent = blits()
+    await clock.advance(1000)
+    expect(blits() - sent).toBeGreaterThan(20)
+    finish('t1')
+    await call
+    await ui.unmount()
+  })
+
+  test('a frame that fails stops the frames, and the next sound starts them again', async ($, on) => {
+    // For a while the clock answers what no frame can count with.
+    let isBroken = false
+    let reads = 0
+    on('clock.now', {}, ($, e, next) => {
+      reads += 1
+
+      return isBroken ? { value: 1n as unknown as number } : next(e)
+    })
+    const { clock, ui, blits, finish } = await staged($, on)
+    const first = $.tool.call({ tool: 'Bash', command: 'make', tool_use_id: 't1' })
+    await clock.advance(500)
+    isBroken = true
+    const read = reads
+    await clock.advance(2000)
+    // Stopped at the first that fails, rather than failing at every tick; nor
+    // does the band, still up, start them again for its idle show.
+    expect(reads - read).toBe(1)
+
+    isBroken = false
+    const second = $.tool.call({ tool: 'Read', file_path: '/src/auth.ts', tool_use_id: 't2' })
+    const sent = blits()
+    await clock.advance(1000)
+    expect(blits() - sent).toBeGreaterThan(20)
+    finish('t1')
+    finish('t2')
+    await Promise.all([first, second])
+    await ui.unmount()
+  })
+
+  test('a tick that comes while the last still reads the clock is let go', async ($, on) => {
+    // A busy host: the clock answers a tenth of a second late.
+    let reads = 0
+    let late: MockClock | undefined
+    on('clock.now', {}, async ($, e, next) => {
+      reads += 1
+      await late?.sleep(100)
+
+      return next(e)
+    })
+    const { clock, ui, blits, finish } = await staged($, on)
+    late = clock
+    const call = $.tool.call({ tool: 'Bash', command: 'make', tool_use_id: 't1' })
+    await clock.advance(500)
+    const read = reads
+    const sent = blits()
+    await clock.advance(1000)
+    // A read at a time, not one at every tick, piling up: and the band still plays.
+    expect(reads - read).toBeLessThan(12)
+    expect(blits() - sent).toBeGreaterThan(5)
+    finish('t1')
+    await call
+    await ui.unmount()
+  })
+
+  test('the idle show draws at 15 fps, and at 8 once Claude has been idle five minutes', { timeoutMs: 20_000 }, async ($, on) => {
+    const frames = counted(on)
+    const { clock, ui } = await staged($, on)
+    await clock.advance(270_000)
+    let from = frames()
+    await clock.advance(10_000)
+    expect(Math.abs(frames() - from - 150)).toBeLessThan(10)
+    await clock.advance(50_000)
+    from = frames()
+    await clock.advance(10_000)
+    expect(Math.abs(frames() - from - 80)).toBeLessThan(6)
     await ui.unmount()
   })
 

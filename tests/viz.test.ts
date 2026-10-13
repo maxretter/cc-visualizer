@@ -207,6 +207,7 @@ describe('the pace of the frames', () => {
     isSettled: true,
     isGlinting: false,
     isHeld: false,
+    isHidden: false,
     ...over,
   })
 
@@ -222,6 +223,16 @@ describe('the pace of the frames', () => {
     expect(pace(beat({ isSettled: false }))).toBe('same')
     expect(pace(beat({ isGlinting: true }))).toBe('show')
     expect(pace(beat({ isHeld: true }))).toBe('show')
+  })
+
+  test('only a try now and then while every drawing is behind a dialog, whatever plays', () => {
+    const hidden = { isHeld: true, isHidden: true }
+    expect(pace(beat({ ...hidden, isCalm: false }))).toBe('held')
+    expect(pace(beat({ ...hidden, isResting: false }))).toBe('held')
+    expect(pace(beat({ ...hidden, isAmbient: true }))).toBe('held')
+    expect(pace(beat(hidden))).toBe('held')
+    // One drawing still seen: the frames keep its pace.
+    expect(pace(beat({ isHeld: true, isCalm: false }))).toBe('full')
   })
 })
 

@@ -264,18 +264,23 @@ export type Beat = {
   isGlinting: boolean
   /** A drawing waits for a frame to land, which a dialog refused. */
   isHeld: boolean
+  /** Every drawing waits so, refused while a dialog covers it: nothing drawn can be seen. */
+  isHidden: boolean
 }
 
-/** What the frames do next: run at the full rate, at a show's, go on as they are, or stop. */
-export type Pace = 'full' | 'show' | 'same' | 'stop'
+/** What the frames do next: run at the full rate, at a show's, at the rate a drawing behind a dialog is tried at, go on as they are, or stop. */
+export type Pace = 'full' | 'show' | 'held' | 'same' | 'stop'
 
 /**
- * How fast the frames run: full while something plays; a show's rate for the
- * vamp, or the idle show on a drawing that stays up; and once the music has
- * stopped, the bars fallen and nothing faded, a show's rate still for a glint
- * partway up the meter or a frame yet to land, else they stop.
+ * How fast the frames run: only as often as a drawing is tried while every
+ * one is behind a dialog, whatever plays; else full while something plays; a
+ * show's rate for the vamp, or the idle show on a drawing that stays up; and
+ * once the music has stopped, the bars fallen and nothing faded, a show's
+ * rate still for a glint partway up the meter or a frame yet to land, else
+ * they stop.
  */
 export function pace(beat: Beat): Pace {
+  if (beat.isHidden) return 'held'
   if (!beat.isCalm) return 'full'
   if (beat.isAmbient || !beat.isResting) return 'show'
   if (!beat.isQuiet || !beat.isSettled) return 'same'

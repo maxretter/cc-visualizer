@@ -132,6 +132,7 @@ export class Stage {
       if (site.names) blit(site, site.names.key, trail(spectrum, prefs.theme, site.names.columns, site.names.rows, tone, ensemble, focus))
       if (site.legend) blit(site, site.legend, site.board.legend(prefs.theme, tone))
     }
+    const held = [...sites.values()].filter(site => site.retryAt !== undefined).length
     return pace({
       isCalm: spectrum.isCalm() && ensemble.isCalm(),
       isAmbient: spectrum.ambient,
@@ -139,7 +140,8 @@ export class Stage {
       isQuiet: spectrum.isQuiet(),
       isSettled: [...sites.values()].every(site => site.board.isSettled()),
       isGlinting: spectrum.glint() !== undefined && spectrum.gauge > 0,
-      isHeld: [...sites.values()].some(site => site.retryAt !== undefined),
+      isHeld: held > 0,
+      isHidden: held > 0 && held === sites.size,
     })
   }
 }
