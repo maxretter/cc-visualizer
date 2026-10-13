@@ -1,8 +1,7 @@
 // A whole drawing: the main spectrum's bars and, at their right, the
 // subagents' channels, as many as fit.
 
-import type { VizTheme } from '../../types'
-import type { Tone } from './color'
+import type { Ink } from './color'
 import { blank, pack } from './cells'
 import type { Canvas } from './cells'
 import type { Spectrum } from './spectrum'
@@ -90,8 +89,8 @@ export class Board {
     return this.bars.isSettled() && this.channels.isSettled()
   }
 
-  /** The whole drawing as Raster cells: the main bars, then the channels. */
-  paint(theme: VizTheme, spectrum: Spectrum, ensemble: Ensemble, labels = false, tone: Tone = 'dark', focus?: Voice): string {
+  /** The whole drawing as Raster cells, in `ink`: the main bars, then the channels. */
+  paint(ink: Ink, spectrum: Spectrum, ensemble: Ensemble, labels = false, focus?: Voice): string {
     const { columns, cells } = this
     const { words } = cells
     words.set(this.blank)
@@ -101,19 +100,19 @@ export class Board {
     const width = this.bars.columns
     const isNarrowed = width < WIDE && width < columns
     cells.right = width
-    this.bars.draw(cells, theme, stray?.spectrum ?? spectrum, labels && !isNarrowed, tone, look)
-    if (labels && isNarrowed) voiceLabel(words, columns, 0, this.bars.span, mainVoice(spectrum), 1, theme, tone)
-    if (width < columns) this.channels.draw(words, columns, width, theme, ensemble, tone)
+    this.bars.draw(cells, ink, stray?.spectrum ?? spectrum, labels && !isNarrowed, look)
+    if (labels && isNarrowed) voiceLabel(words, columns, 0, this.bars.span, mainVoice(spectrum), 1, ink)
+    if (width < columns) this.channels.draw(words, columns, width, ink, ensemble)
     return pack(words)
   }
 
   /** The legend under the main bars and under a channel grown wide, as wide as they are now; nothing under the other channels. */
-  legend(theme: VizTheme, tone: Tone = 'dark'): string {
+  legend(ink: Ink): string {
     const row = this.legendRow
     row.words.set(this.blankRow)
     row.right = this.bars.columns
-    this.bars.drawLegend(row, theme, tone)
-    this.channels.legend(row.words, this.columns, this.bars.columns, theme, tone)
+    this.bars.drawLegend(row, ink)
+    this.channels.legend(row.words, this.columns, this.bars.columns, ink)
     return pack(row.words)
   }
 }

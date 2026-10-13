@@ -4,7 +4,7 @@ import { Bars } from '../hooks/engine/bars'
 import { idleText } from '../hooks/engine/names'
 import { IDLE_DELAY, Spectrum } from '../hooks/engine/spectrum'
 import { trail } from '../hooks/engine/trail'
-import { prefsStore, staged, text } from './support'
+import { ink, prefsStore, staged, text } from './support'
 
 describe('idle', () => {
   const run = (args: string) => ({
@@ -23,7 +23,7 @@ describe('idle', () => {
       spectrum.step()
       bars.step(spectrum)
       // Under the label row, and the swell keeps to the bottom of the band.
-      if (i > 200) highest = Math.max(highest, ...text(bars.paint('instrument', spectrum), 80).slice(1).map((row, r) => (row.trim() === '' ? 0 : 3 - r)))
+      if (i > 200) highest = Math.max(highest, ...text(bars.paint(ink, spectrum), 80).slice(1).map((row, r) => (row.trim() === '' ? 0 : 3 - r)))
     }
     expect(spectrum.idle).toBeGreaterThan(0.95)
     expect(spectrum.isResting()).toBe(true)
@@ -76,14 +76,14 @@ describe('idle', () => {
     spectrum.ambient = true
     spectrum.step(IDLE_DELAY)
     for (let i = 0; i < 120; i++) spectrum.step()
-    const [top] = text(new Bars(80, 4).paint('instrument', spectrum, true), 80)
+    const [top] = text(new Bars(80, 4).paint(ink, spectrum, true), 80)
     expect(top?.trimEnd()).toMatch(/^\s*idle$/)
-    const [, bottom] = text(trail(spectrum, 'instrument', 30, 2), 30)
+    const [, bottom] = text(trail(spectrum, ink, 30, 2), 30)
     expect(bottom?.trimEnd()).toMatch(/ idle$/)
 
     spectrum.hit('read')
     for (let i = 0; i < 30; i++) spectrum.step()
-    expect(text(trail(spectrum, 'instrument', 30, 2), 30).join('')).not.toContain('idle')
+    expect(text(trail(spectrum, ink, 30, 2), 30).join('')).not.toContain('idle')
   })
 
   test('no idle show while a subagent works, though the main loop rests; it comes once the subagent is done', async ($, on) => {

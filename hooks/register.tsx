@@ -9,6 +9,7 @@ import type { Elements, EngineInterface, Register, Timer } from 'claude-code'
 
 import type { VizMode, VizSize, VizTheme } from '../types'
 import type { Layout } from './engine/bars'
+import { inkOf } from './engine/color'
 import { DOCTOR_ROWS, swatches } from './engine/doctor'
 import { FRAME_MS } from './engine/math'
 import { trail } from './engine/trail'
@@ -400,6 +401,7 @@ export const register: Register = on => {
   const band = (ui: Pick<Elements['terminal'], 'Box' | 'Raster'>, requestId: string, s: VizSize, t: VizTheme, bodyColumns: number, room: number) => {
     const { Box, Raster } = ui
     const focus = stage.inView()
+    const ink = inkOf(t, stage.tone)
     if (s === 'mini') {
       const columns = clamp(Math.min(MINI_COLUMNS, bodyColumns), 1, 512)
       const rows = Math.min(MINI_ROWS, room)
@@ -409,8 +411,8 @@ export const register: Register = on => {
 
       return (
         <Box width={bodyColumns} justifyContent="flex-end">
-          {names && <Raster key="names" columns={names.columns} rows={rows} cells={trail(spectrum, t, names.columns, rows, stage.tone, ensemble, focus)} />}
-          <Raster key="mini" columns={columns} rows={rows} cells={site.board.paint(t, spectrum, ensemble, false, stage.tone, focus)} />
+          {names && <Raster key="names" columns={names.columns} rows={rows} cells={trail(spectrum, ink, names.columns, rows, ensemble, focus)} />}
+          <Raster key="mini" columns={columns} rows={rows} cells={site.board.paint(ink, spectrum, ensemble, false, focus)} />
         </Box>
       )
     }
@@ -419,7 +421,7 @@ export const register: Register = on => {
     const rows = Math.min(BAND_ROWS, room)
     const site = stage.mount(requestId, 'band', columns, rows, { layout: wide(columns), labels: true })
 
-    return <Raster key="band" columns={columns} rows={rows} cells={site.board.paint(t, spectrum, ensemble, true, stage.tone, focus)} />
+    return <Raster key="band" columns={columns} rows={rows} cells={site.board.paint(ink, spectrum, ensemble, true, focus)} />
   }
 
   // Above the prompt: the band in the slot over the input. Another surface
@@ -491,6 +493,7 @@ export const register: Register = on => {
 
     const t = checked(isTheme, await read($, theme), stage.prefs.theme)
     const { Box, Raster } = $.ui.resolve(e)
+    const ink = inkOf(t, stage.tone)
     stage.viewed = e.props.view?.agentId
     const columns = clamp(e.props.bodyColumns, 1, 512)
     const rows = clamp(e.props.scroll.bodyRows - 1, 2, PANE_ROWS)
@@ -498,8 +501,8 @@ export const register: Register = on => {
 
     return (
       <Box flexDirection="column">
-        <Raster key="pane" columns={columns} rows={rows} cells={site.board.paint(t, spectrum, ensemble, true, stage.tone, stage.inView())} />
-        <Raster key="legend" columns={columns} rows={1} cells={site.board.legend(t, stage.tone)} />
+        <Raster key="pane" columns={columns} rows={rows} cells={site.board.paint(ink, spectrum, ensemble, true, stage.inView())} />
+        <Raster key="legend" columns={columns} rows={1} cells={site.board.legend(ink)} />
       </Box>
     )
   })
@@ -536,7 +539,7 @@ export const register: Register = on => {
           <Box flexDirection="column" width={DOCTOR_NAMES}>
             <Text dimColor>{DOCTOR_ROWS.join('\n')}</Text>
           </Box>
-          <Raster key="doctor" columns={columns} rows={DOCTOR_ROWS.length} cells={swatches(t, stage.tone, columns)} />
+          <Raster key="doctor" columns={columns} rows={DOCTOR_ROWS.length} cells={swatches(inkOf(t, stage.tone), columns)} />
         </Box>
         <Text dimColor>{DOCTOR_HINTS.join('\n')}</Text>
       </Box>

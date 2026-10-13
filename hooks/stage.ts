@@ -4,6 +4,7 @@
 
 import type { Layout } from './engine/bars'
 import { Board } from './engine/board'
+import { inkOf } from './engine/color'
 import type { Tone } from './engine/color'
 import { Ensemble } from './engine/ensemble'
 import { Spectrum } from './engine/spectrum'
@@ -128,12 +129,13 @@ export class Stage {
     spectrum.step(elapsed)
     ensemble.step(elapsed)
     const focus = this.inView()
+    const ink = inkOf(prefs.theme, tone)
     for (const site of sites.values()) site.board.step(spectrum, ensemble, focus)
     for (const site of sites.values()) {
       if (site.retryAt !== undefined && spectrum.now < site.retryAt) continue
-      blit(site, site.key, site.board.paint(prefs.theme, spectrum, ensemble, site.labels, tone, focus))
-      if (site.names) blit(site, site.names.key, trail(spectrum, prefs.theme, site.names.columns, site.names.rows, tone, ensemble, focus))
-      if (site.legend) blit(site, site.legend, site.board.legend(prefs.theme, tone))
+      blit(site, site.key, site.board.paint(ink, spectrum, ensemble, site.labels, focus))
+      if (site.names) blit(site, site.names.key, trail(spectrum, ink, site.names.columns, site.names.rows, ensemble, focus))
+      if (site.legend) blit(site, site.legend, site.board.legend(ink))
     }
     const held = [...sites.values()].filter(site => site.retryAt !== undefined).length
     return pace({

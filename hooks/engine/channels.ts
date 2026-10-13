@@ -1,9 +1,8 @@
 // The subagents' channels beside the main bars: each a small spectrum of its
 // own voice, opening as its agent starts and closing once it is done.
 
-import type { VizTheme } from '../../types'
-import { GROUND, LEGEND_GRAY, legible, mix } from './color'
-import type { Tone } from './color'
+import { LEGEND_GRAY, mix } from './color'
+import type { Ink } from './color'
 import { SPACE, write } from './cells'
 import type { Ensemble, Voice } from './ensemble'
 import { focusLead, voiceLabel } from './names'
@@ -136,7 +135,7 @@ export class Channels {
    * still shows how its agent's work went as it shrinks. One grown wide is
    * labeled as the main bars are, its name leading.
    */
-  draw(words: Uint32Array, columns: number, left: number, theme: VizTheme, ensemble: Ensemble, tone: Tone) {
+  draw(words: Uint32Array, columns: number, left: number, ink: Ink, ensemble: Ensemble) {
     const { rows } = this
     const waiting = this.waiting(ensemble).length
     const more = waiting > 0 ? `+${waiting}` : ''
@@ -149,32 +148,32 @@ export class Channels {
         const width = seat.bars.columns
         const isWide = width >= WIDE
         const into = { words, columns, left: at + CHANNEL_GAP, right: at + shows }
-        seat.bars.draw(into, theme, seat.voice.spectrum, isWide, tone, isWide ? { lead: focusLead(seat.voice) } : {})
+        seat.bars.draw(into, ink, seat.voice.spectrum, isWide, isWide ? { lead: focusLead(seat.voice) } : {})
         if (alpha < 1) {
           for (let r = 0; r < rows; r++) {
             for (let c = into.left; c < into.right; c++) {
               const cell = (r * columns + c) * 3
-              if (words[cell] !== SPACE) words[cell + 1] = mix(GROUND[tone], words[cell + 1]!, alpha)
+              if (words[cell] !== SPACE) words[cell + 1] = mix(ink.ground, words[cell + 1]!, alpha)
             }
           }
         }
         if (!isWide) {
           const room = i === this.seats.length - 1 && more !== '' ? width - more.length - 1 : width
-          voiceLabel(words, columns, into.left, room, seat.voice, alpha, theme, tone, into.right)
+          voiceLabel(words, columns, into.left, room, seat.voice, alpha, ink, into.right)
         }
       }
       at += shows
     })
-    if (more !== '') write(words, columns, 0, columns - more.length, more, mix(GROUND[tone], legible(LEGEND_GRAY, tone), 0.85))
+    if (more !== '') write(words, columns, 0, columns - more.length, more, ink.faded(LEGEND_GRAY, 0.85))
   }
 
   /** Under each channel grown wide, its bars' legend, into a row `columns` wide whose channels start at column `left`. */
-  legend(words: Uint32Array, columns: number, left: number, theme: VizTheme, tone: Tone) {
+  legend(words: Uint32Array, columns: number, left: number, ink: Ink) {
     let at = left
     for (const seat of this.seats) {
       const shows = Math.min(this.widthOf(seat), columns - at)
       if (seat.bars.columns >= WIDE && shows > CHANNEL_GAP) {
-        seat.bars.drawLegend({ words, columns, left: at + CHANNEL_GAP, right: at + shows }, theme, tone)
+        seat.bars.drawLegend({ words, columns, left: at + CHANNEL_GAP, right: at + shows }, ink)
       }
       at += shows
     }

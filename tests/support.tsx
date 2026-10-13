@@ -5,6 +5,8 @@ import type { ConfigRow, On, PermissionRequestDecision, SessionUsage, ToolCallRe
 import { mock } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
+import { inkOf } from '../hooks/engine/color'
+
 /** The glyphs of Raster cells, row by row. */
 export const text = (cells: string, columns: number): string[] => {
   const raw = atob(cells)
@@ -31,6 +33,9 @@ export const colors = (cells: string, columns: number): number[][] => {
   }
   return rows
 }
+
+/** The ink the tests draw in where the colors are not the point: the instrument theme's, on a dark background. */
+export const ink = inkOf('instrument', 'dark')
 
 export const band = (isWorking: boolean) => ({
   plugin: 'visualizer',

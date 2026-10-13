@@ -2,21 +2,13 @@
 // compaction, the idle), the thinking, each tool call, the context's fill, and
 // each subagent with what it is doing.
 
-import type { VizTheme } from '../../types'
 import { cycle } from './math'
-import { INDEX, SOURCES } from './sources'
 import type { SourceId } from './sources'
-import { CUE, ERROR, GROUND, LEGEND_GRAY, legible, meterColor, mix, paletteOf } from './color'
-import type { Tone } from './color'
+import { CUE, ERROR, LEGEND_GRAY, meterColor } from './color'
+import type { Ink } from './color'
 import { spinnerAt, write } from './cells'
 import type { Call, Spectrum } from './spectrum'
 import type { Voice } from './ensemble'
-
-/** A tool's name in the color of the theme, as strong as the call's name shows, faded into the background. */
-export function nameColor(theme: VizTheme, source: SourceId, strength: number, tone: Tone): number {
-  const color = theme === 'instrument' ? legible(SOURCES[INDEX[source]]!.color, tone) : paletteOf(theme, tone).peak(0)
-  return mix(GROUND[tone], color, strength)
-}
 
 const label = (call: Call) => (call.count > 1 ? `${call.name}\u00d7${call.count}` : call.name)
 
@@ -88,10 +80,9 @@ const idleName = (spectrum: Spectrum): Named | undefined =>
       }
     : undefined
 
-export const nameColorOf = (theme: VizTheme, name: Named, strength: number, tone: Tone) =>
-  name.color === undefined
-    ? nameColor(theme, name.source, strength, tone)
-    : mix(GROUND[tone], legible(name.color, tone), strength)
+/** A name's color in `ink`, as strong as `strength`: its own, else its tool's. */
+export const nameColorOf = (ink: Ink, name: Named, strength: number) =>
+  name.color === undefined ? ink.name(name.source, strength) : ink.faded(name.color, strength)
 
 export const thinkingName = (spectrum: Spectrum): Named | undefined =>
   spectrum.mind > 0.05 ? { text: 'thinking', source: 'think', strength: spectrum.mind, isRunning: spectrum.thinking > 0 } : undefined
@@ -160,12 +151,12 @@ export const voiceName = (voice: Voice): Named => {
  * it as far faded in as the channel is `shown`, and cut off at column `end`
  * where less of the channel shows.
  */
-export function voiceLabel(words: Uint32Array, columns: number, start: number, width: number, voice: Voice, shown: number, theme: VizTheme, tone: Tone, end = columns) {
+export function voiceLabel(words: Uint32Array, columns: number, start: number, width: number, voice: Voice, shown: number, ink: Ink, end = columns) {
   const act = doing(voice)
   const spin = act?.isRunning === true ? 2 : 0
   const room = act === undefined ? width : Math.max(4, width - act.text.length - spin - 1)
   const name = fit(voice.name, Math.min(room, width))
-  write(words, columns, 0, start, name, mix(GROUND[tone], legible(voice.color, tone), shown), end)
+  write(words, columns, 0, start, name, ink.faded(voice.color, shown), end)
   if (act === undefined) return
   let at = start + name.length + 1
   const left = start + width - at - spin
@@ -174,9 +165,9 @@ export function voiceLabel(words: Uint32Array, columns: number, start: number, w
     const cell = at * 3
     if (at < end) {
       words[cell] = spinnerAt(voice.spectrum.now)
-      words[cell + 1] = nameColorOf(theme, act, shown, tone)
+      words[cell + 1] = nameColorOf(ink, act, shown)
     }
     at += spin
   }
-  write(words, columns, 0, at, act.text.slice(0, left), nameColorOf(theme, act, act.strength * shown, tone), end)
+  write(words, columns, 0, at, act.text.slice(0, left), nameColorOf(ink, act, act.strength * shown), end)
 }

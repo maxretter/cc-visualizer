@@ -4,7 +4,7 @@ import { Bars } from '../hooks/engine/bars'
 import { FRAME_MS } from '../hooks/engine/math'
 import { Spectrum } from '../hooks/engine/spectrum'
 import { trail } from '../hooks/engine/trail'
-import { text } from './support'
+import { ink, text } from './support'
 
 describe('thinking', () => {
   const braille = /[\u2801-\u28ff]/
@@ -18,7 +18,7 @@ describe('thinking', () => {
       bars.step(spectrum)
     }
     expect(spectrum.mind).toBeGreaterThan(0.5)
-    expect(text(bars.paint('instrument', spectrum), 80).join('')).toMatch(braille)
+    expect(text(bars.paint(ink, spectrum), 80).join('')).toMatch(braille)
 
     spectrum.endThinking()
     for (let i = 0; i < 400; i++) {
@@ -26,7 +26,7 @@ describe('thinking', () => {
       bars.step(spectrum)
     }
     expect(spectrum.mind).toBe(0)
-    expect(text(bars.paint('instrument', spectrum), 80).join('')).not.toMatch(braille)
+    expect(text(bars.paint(ink, spectrum), 80).join('')).not.toMatch(braille)
     expect(spectrum.isQuiet()).toBe(true)
   })
 
@@ -61,8 +61,8 @@ describe('thinking', () => {
       sparked.spark(0.3, isFromRight)
       // The columns where the two brainwaves differ: the spike, and around it.
       const spike = () => {
-        const a = text(new Bars(80, 4).paint('instrument', quiet), 80)
-        const b = text(new Bars(80, 4).paint('instrument', sparked), 80)
+        const a = text(new Bars(80, 4).paint(ink, quiet), 80)
+        const b = text(new Bars(80, 4).paint(ink, sparked), 80)
         const columns: number[] = []
         for (let c = 0; c < 80; c++) if (a.some((row, r) => row[c] !== b[r]![c])) columns.push(c)
         return columns
@@ -86,9 +86,9 @@ describe('thinking', () => {
     spectrum.endCall(spectrum.startCall('Read'))
     spectrum.beginThinking()
     for (let i = 0; i < 10; i++) spectrum.step()
-    const [, bottom] = text(trail(spectrum, 'instrument', 40, 2), 40)
+    const [, bottom] = text(trail(spectrum, ink, 40, 2), 40)
     expect(bottom?.trimEnd()).toMatch(/Read \u00b7 \S thinking$/)
-    const [top] = text(new Bars(80, 4).paint('instrument', spectrum, true), 80)
+    const [top] = text(new Bars(80, 4).paint(ink, spectrum, true), 80)
     expect(top).toContain('thinking')
   })
 })

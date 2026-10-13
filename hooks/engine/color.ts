@@ -1,9 +1,11 @@
-// The colors: each theme's palette, the background a tone stands for, and how
-// a color is made to stand out on it, light or dark.
+// The colors: each theme's palette, the background a tone stands for, how
+// a color is made to stand out on it, light or dark, and the ink the drawings
+// take from a theme on a background.
 
 import type { VizTheme } from '../../types'
 import { bump } from './math'
-import { SOURCES } from './sources'
+import { INDEX, SOURCES } from './sources'
+import type { SourceId } from './sources'
 
 export const THEME_NAMES: readonly VizTheme[] = ['instrument', 'claude', 'synthwave', 'classic']
 
@@ -37,7 +39,7 @@ function stops(points: readonly (readonly [number, number])[], peak: number, flo
   return { bar, peak: () => peak, floor: () => floor }
 }
 
-export const THEMES: Record<VizTheme, Palette> = {
+const THEMES: Record<VizTheme, Palette> = {
   instrument: {
     bar: (y, tint) => mix(0, tint, 0.45 + 0.55 * y),
     peak: tint => mix(tint, 0xffffff, 0.55),
@@ -108,7 +110,7 @@ export function backgroundOf(colorfgbg?: string): number | undefined {
  * white and its colors are darkened to stand out, its peak caps darker than
  * the bars rather than brighter.
  */
-export function paletteOf(theme: VizTheme, tone: Tone): Palette {
+function paletteOf(theme: VizTheme, tone: Tone): Palette {
   const dark = THEMES[theme]
   if (tone === 'dark') return dark
   const white = GROUND.light
@@ -150,3 +152,69 @@ const RED_AT = 0.9
 
 /** The meter's color at `share` of the way to auto-compact: `below` until it turns amber, then amber, then red. */
 export const meterColor = (share: number, below: number): number => (share >= RED_AT ? ERROR : share >= AMBER_AT ? CUE : below)
+
+/** The brainwave's violet, on the instrument theme; the others draw it in their own colors. */
+const MIND = 0xa78bfa
+
+/**
+ * A theme's ink on a tone's background: every color the drawings take from
+ * the theme, each made to stand out on the background. `inkOf` works it out
+ * once for each theme and tone.
+ */
+export type Ink = {
+  readonly tone: Tone
+  /** The background, which colors fade into. */
+  readonly ground: number
+  /** A bar's color at height `y`, 0 to 1, for a bar of its own color `tint`; its peak cap's; its floor's. */
+  bar(y: number, tint: number): number
+  peak(tint: number): number
+  floor(tint: number): number
+  /** The theme's colors along a swatch, at `x`, 0 to 1: up the bars, or the instrument theme's across its instruments. */
+  ramp(x: number): number
+  /** A tool's name over its instrument's band, as strong as `strength`, faded into the background. */
+  name(source: SourceId, strength: number): number
+  /** An instrument's name in the legend. */
+  legend(source: SourceId): number
+  /** The brainwave's color. */
+  readonly mind: number
+  /** The amber the bars turn while the person is waited on, and the red after an error. */
+  readonly cue: number
+  readonly error: number
+  /** `color` made to stand out on the background, faded into it but for `s`. */
+  faded(color: number, s: number): number
+}
+
+/** The inks worked out so far, by tone and theme: a theme's ink is the same each time. */
+const inks: Record<Tone, Map<VizTheme, Ink>> = { dark: new Map(), light: new Map() }
+
+/**
+ * A theme's ink on a tone's background. The instrument theme colors each
+ * tool's name, and the legend, in its instrument's color, and the brainwave
+ * violet; the others color the names as their peak caps, the legend gray, and
+ * the brainwave high on their bars.
+ */
+export function inkOf(theme: VizTheme, tone: Tone): Ink {
+  const known = inks[tone].get(theme)
+  if (known !== undefined) return known
+  const palette = paletteOf(theme, tone)
+  const ground = GROUND[tone]
+  const isInstrument = theme === 'instrument'
+  const names = SOURCES.map(s => (isInstrument ? legible(s.color, tone) : palette.peak(0)))
+  const legends = SOURCES.map(s => legible(isInstrument ? s.color : LEGEND_GRAY, tone))
+  const ink: Ink = {
+    tone,
+    ground,
+    bar: palette.bar,
+    peak: palette.peak,
+    floor: palette.floor,
+    ramp: x => palette.bar(isInstrument ? 1 : x, instrumentColor(x)),
+    name: (source, strength) => mix(ground, names[INDEX[source]]!, strength),
+    legend: source => legends[INDEX[source]]!,
+    mind: isInstrument ? legible(MIND, tone) : palette.bar(0.8, 0),
+    cue: legible(CUE, tone),
+    error: legible(ERROR, tone),
+    faded: (color, s) => mix(ground, legible(color, tone), s),
+  }
+  inks[tone].set(theme, ink)
+  return ink
+}

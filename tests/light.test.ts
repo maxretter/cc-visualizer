@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { Bars } from '../hooks/engine/bars'
-import { GROUND, legible, luminance, toneOf } from '../hooks/engine/color'
+import { GROUND, inkOf, legible, luminance, toneOf } from '../hooks/engine/color'
 import { swatches } from '../hooks/engine/doctor'
 import { SOURCES } from '../hooks/engine/sources'
 import { Spectrum } from '../hooks/engine/spectrum'
@@ -62,21 +62,21 @@ describe('light terminals', () => {
       spectrum.step()
       bars.step(spectrum)
     }
-    const light = colors(bars.paint('instrument', spectrum, false, 'light'), 80)
-    const dark = colors(bars.paint('instrument', spectrum, false, 'dark'), 80)
+    const light = colors(bars.paint(inkOf('instrument', 'light'), spectrum), 80)
+    const dark = colors(bars.paint(inkOf('instrument', 'dark'), spectrum), 80)
     expect(brightness(light[3]!)).toBeGreaterThan(brightness(light[1]!))
     expect(brightness(dark[3]!)).toBeLessThan(brightness(dark[1]!))
   })
 
   test("the doctor's swatches put the background expected beside the terminal's own", () => {
     for (const tone of ['dark', 'light'] as const) {
-      const cells = swatches('instrument', tone, 64)
+      const cells = swatches(inkOf('instrument', tone), 64)
       expect(backgrounds(cells, 64)[2]![0]).toBe(0x01000000)
       expect(backgrounds(cells, 64)[2]![63]).toBe(GROUND[tone])
       // The fade begins in the background.
       expect(colors(cells, 64)[3]![0]).toBe(GROUND[tone])
     }
-    expect(text(swatches('instrument', 'dark', 64), 64)[1]).toContain(' web/mcp ')
+    expect(text(swatches(inkOf('instrument', 'dark'), 64), 64)[1]).toContain(' web/mcp ')
   })
 
   test("the band paints for the background: Claude Code's light theme, then /viz ground", async ($, on) => {
