@@ -73,10 +73,12 @@ async function themeOf($: EngineInterface): Promise<unknown> {
 
 /** The prefs, published for the drawings, which redraw as they change. */
 async function publish($: EngineInterface, prefs: Prefs) {
-  await update($, mode, () => prefs.mode)
-  await update($, theme, () => prefs.theme)
-  await update($, size, () => prefs.size)
-  await update($, place, () => prefs.place)
+  await Promise.all([
+    update($, mode, () => prefs.mode),
+    update($, theme, () => prefs.theme),
+    update($, size, () => prefs.size),
+    update($, place, () => prefs.place),
+  ])
 }
 
 export const register: Register = on => {
@@ -236,26 +238,44 @@ export const register: Register = on => {
       else if (isAmbient(stage.prefs, stage.drawn())) run(spectrum.showMs())
     }
 
-    await $.command.register({ name: 'viz', description: 'Music visualizer for what Claude is doing', argumentHint: HINT, immediate: true })
-    stage.prefs = prefsFrom(await $.store.get('prefs'))
-    await publish($, stage.prefs)
-    // The terminal's background, as Claude Code's theme and the terminal tell it.
-    stage.backdrop = {
-      theme: await themeOf($),
-      colorfgbg: await $.env.get('COLORFGBG').catch(() => undefined),
-    }
+    // What the first prompt needs, side by side, each step on its own so that
+    // one refused leaves the rest to run.
+    await Promise.all(
+      [
+        // /viz, listed by the first prompt.
+        $.command.register({ name: 'viz', description: 'Music visualizer for what Claude is doing', argumentHint: HINT, immediate: true }),
+        // The settings as saved, published for the drawings.
+        $.store.get('prefs').then(saved => {
+          stage.prefs = prefsFrom(saved)
+          return publish($, stage.prefs)
+        }),
+        // The terminal's background, as Claude Code's theme and the terminal tell it.
+        Promise.all([themeOf($), $.env.get('COLORFGBG').catch(() => undefined)]).then(([setting, colorfgbg]) => {
+          stage.backdrop = { theme: setting, colorfgbg }
+        }),
+        // Playing or not as the frames are now: a reload mid-turn may have woken them already.
+        update($, isPlaying, () => isAwake),
+      ].map(step => step.catch(() => {})),
+    )
     stage.retone()
-    // Playing or not as the frames are now: a reload mid-turn may have woken them already.
-    await update($, isPlaying, () => isAwake)
-    // The meter as it stood, after a reload or on a resumed session.
+    // A band that stays up plays its idle show from the start, as it did before a reload.
+    stage.rest()
+
+    // These can follow the first prompt, each on its own too. The meter as it
+    // stood, after a reload or on a resumed session.
     void measureContext($).then(context => stage.remeasured(context), () => {})
     // The subagents at work through a reload, each back in a channel of its own.
-    for (const agent of await $.agent.list().catch(() => [])) {
-      const info = { name: agent.name, description: agent.description, type: agent.type }
-      if (agent.status === 'pending' || agent.status === 'running' || agent.status === 'waiting') ensemble.join(agent.id, info)
-      else ensemble.know(agent.id, info)
-    }
-    if (!ensemble.isCalm()) stage.wake()
+    void $.agent
+      .list()
+      .then(agents => {
+        for (const agent of agents) {
+          const info = { name: agent.name, description: agent.description, type: agent.type }
+          if (agent.status === 'pending' || agent.status === 'running' || agent.status === 'waiting') ensemble.join(agent.id, info)
+          else ensemble.know(agent.id, info)
+        }
+        if (!ensemble.isCalm()) stage.wake()
+      })
+      .catch(() => {})
 
     return next(e)
   })

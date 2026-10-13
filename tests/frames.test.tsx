@@ -4,7 +4,7 @@ import type { MockClock } from 'claude-code/testing'
 
 import { FRAME_MS } from '../hooks/engine/math'
 import { Spectrum } from '../hooks/engine/spectrum'
-import { band, staged } from './support'
+import { band, pane, prefsStore, staged, text } from './support'
 
 /**
  * How many frames the plugin has drawn so far: each starts by reading the
@@ -149,6 +149,84 @@ describe('a reload', () => {
     await ui.unmount()
   })
 
+  test('a drawing that stays up plays its idle show again, with nothing to wake it', async ($, on) => {
+    const clock = mock.clock(on)
+    mock.store(on)
+    on('session.start', ($, e) => ({ cwd: e.cwd }))
+    on('command.register', ($, e) => ({ value: { command: e.name } }))
+    let drawn = ''
+    on('ui.blit', ($, e) => {
+      if ('cells' in e) drawn = e.cells
+
+      return { value: {} }
+    })
+
+    // The pane, open through the reload, is drawn again before the plugin has started.
+    const ui = await $.ui.mount(pane)
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+    await clock.advance(10_000)
+    expect(text(drawn, 80)[0]).toMatch(/^\s*idle/)
+    await ui.unmount()
+  })
+})
+
+describe('the start of a session', () => {
+  test('restores the settings saved', async ($, on) => {
+    mock.clock(on)
+    prefsStore(on, { mode: 'always', size: 'mini', place: 'below', theme: 'synthwave', ground: 'light', idle: false })
+    on('session.start', ($, e) => ({ cwd: e.cwd }))
+    on('command.register', ($, e) => ({ value: { command: e.name } }))
+    on('command.run', () => ({ text: '' }))
+    on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
+      const { Text } = $.ui.resolve(e)
+
+      return <Text>engine</Text>
+    })
+    on('ui.render', { component: 'PromptHint' }, ($, e) => {
+      const { Text } = $.ui.resolve(e)
+
+      return <Text>{e.props.hint}</Text>
+    })
+    on('ui.blit', () => ({ value: {} }))
+
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+    // Claude is not working: up all the same, small, and under the prompt.
+    const above = await $.ui.mount(band(false))
+    expect(await above.find({ type: 'Raster', key: 'band' })).toBeUndefined()
+    const below = await $.ui.mount({
+      plugin: 'visualizer',
+      surface: 'terminal',
+      component: 'PromptHint',
+      requestId: 'hint',
+      viewport: { columns: 85, rows: 40, isFullscreen: true },
+      props: { isDraft: false, isWorking: false, hint: '? for shortcuts' },
+    })
+    expect((await below.find({ type: 'Raster', key: 'mini' }))?.props).toMatchObject({ columns: 32, rows: 2 })
+    const report =
+      (await $.command.run({ command: 'viz', args: 'doctor', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 80 } })).text ?? ''
+    expect(report).toContain('Visualizer: always, mini below the prompt, theme synthwave, idle off')
+    expect(report).toContain('Background: light, as /viz ground set it')
+    await below.unmount()
+    await above.unmount()
+  })
+
+  test('a step that fails leaves the rest: the background, the meter and the subagents are read all the same', async ($, on) => {
+    // The store cannot be read as the session starts.
+    let isLocked = true
+    on('store.get', { key: 'prefs' }, ($, e, next) => {
+      if (!isLocked) return next(e)
+      isLocked = false
+
+      return { deny: 'the store is locked' }
+    })
+    on('agent.list', () => ({ value: [{ id: 'a1', description: 'Map the API', type: 'Explore', status: 'running' as const }] }))
+    const { clock, ui, viz, label } = await staged($, on, { theme: 'light', context: () => ({ tokens: 50_000, window: 200_000 }) })
+    await clock.advance(500)
+    expect(label()).toContain('Map the API')
+    expect(label()).toContain('context 25%')
+    expect((await viz('doctor')).text).toContain("Background: light, from Claude Code's light theme")
+    await ui.unmount()
+  })
 })
 
 describe('frames', () => {
