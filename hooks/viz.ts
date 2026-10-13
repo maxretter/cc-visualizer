@@ -60,12 +60,22 @@ export type Backdrop = { theme?: unknown; colorfgbg?: string }
 export const toneFor = (ground: Ground, backdrop: Backdrop): Tone =>
   ground === 'auto' ? toneOf(backdrop.theme, backdrop.colorfgbg) : ground
 
+/** The most characters of a value read from outside that a reply echoes. */
+const ECHOED = 64
+
+/**
+ * A value read from outside (the environment, a setting, what was typed) as
+ * a reply echoes it: printable ASCII only, and no more than 64 characters.
+ * The reply stays in the transcript, which the model reads.
+ */
+export const printable = (value: string): string => value.replace(/[^\x20-\x7e]/g, '').slice(0, ECHOED)
+
 /** The tone and where it came from, as /viz ground and the doctor say it. */
 export function groundText(ground: Ground, backdrop: Backdrop): string {
   const tone = toneFor(ground, backdrop)
   if (ground !== 'auto') return `${tone}, as /viz ground set it`
-  if (typeof backdrop.theme === 'string' && backdrop.theme !== 'auto') return `${tone}, from Claude Code's ${backdrop.theme} theme`
-  if (backdrop.colorfgbg) return `${tone}, from the terminal's COLORFGBG (${backdrop.colorfgbg})`
+  if (typeof backdrop.theme === 'string' && backdrop.theme !== 'auto') return `${tone}, from Claude Code's ${printable(backdrop.theme)} theme`
+  if (backdrop.colorfgbg) return `${tone}, from the terminal's COLORFGBG (${printable(backdrop.colorfgbg)})`
   return `${tone}, assumed: Claude Code's theme is auto and the terminal doesn't say`
 }
 
@@ -171,7 +181,7 @@ export function command(args: string, prefs: Prefs, situation: Situation): Outco
       }
     }
     case 'theme': {
-      if (arg !== '' && !isTheme(arg)) return same(`No theme "${arg}". Themes: ${THEME_NAMES.join(', ')}.`)
+      if (arg !== '' && !isTheme(arg)) return same(`No theme "${printable(arg)}". Themes: ${THEME_NAMES.join(', ')}.`)
       const theme = isTheme(arg) ? arg : THEME_NAMES[(THEME_NAMES.indexOf(prefs.theme) + 1) % THEME_NAMES.length]!
       return { prefs: { ...prefs, theme }, text: `Visualizer theme: ${theme}.` }
     }
@@ -200,14 +210,18 @@ export const DOCTOR_HINTS = [
 /** The terminal's own say: its TERM, COLORTERM and TERM_PROGRAM. */
 export type Terminal = { term?: string; colorterm?: string; program?: string }
 
-/** /viz doctor's report, for the model and any surface: what the terminal and the visualizer say, a line each, then the hints. */
+/**
+ * /viz doctor's report, for the model and any surface: what the terminal and
+ * the visualizer say, a line each, then the hints. What it read is echoed
+ * `printable`, so none of it can add a line or an escape sequence.
+ */
 export function doctorReport(terminal: Terminal, prefs: Prefs, backdrop: Backdrop): string {
   const { term, colorterm, program } = terminal
   const isTrue = colorterm === 'truecolor' || colorterm === '24bit'
-  const color = isTrue ? '24-bit color' : `COLORTERM ${colorterm ?? 'unset'}, so perhaps 256 colors`
+  const color = isTrue ? '24-bit color' : `COLORTERM ${colorterm !== undefined ? printable(colorterm) : 'unset'}, so perhaps 256 colors`
   const facts = [
-    `Terminal: ${term ?? 'TERM unset'}${program ? ` (${program})` : ''}, ${color}`,
-    `Claude Code theme: ${typeof backdrop.theme === 'string' ? backdrop.theme : 'unknown'}`,
+    `Terminal: ${term !== undefined ? printable(term) : 'TERM unset'}${program ? ` (${printable(program)})` : ''}, ${color}`,
+    `Claude Code theme: ${typeof backdrop.theme === 'string' ? printable(backdrop.theme) : 'unknown'}`,
     `Background: ${groundText(prefs.ground, backdrop)}`,
     `Visualizer: ${prefs.mode}, ${prefs.size} ${prefs.place} the prompt, theme ${prefs.theme}, idle ${prefs.idle ? 'on' : 'off'}`,
   ]
