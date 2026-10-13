@@ -17,10 +17,12 @@ export type Voice = {
   endedAt?: number
 }
 
-/** The subagents' colors, in the order they join: apart from each other, and from the amber of a wait and the red of an error. */
+/** The subagents' colors: apart from each other, and from the amber of a wait and the red of an error. Each joins in the first one no other on stage has. */
 const VOICE_COLORS = [0x60a5fa, 0xfb923c, 0xa3e635, 0xe879f9, 0x22d3ee, 0xfb7185, 0x818cf8, 0x34d399]
 /** How long a finished subagent's channel stays, saying how it went, before it closes. */
 const VOICE_LINGER = 3_000
+/** How many of the subagents heard of are remembered, the latest: a session's workflows may start hundreds. */
+const KNOWN = 256
 /** The main loop's color, where it is named as a voice: over its bars narrowed for a subagent in focus, and in the trail. */
 const MAIN_COLOR = 0xe5e7eb
 
@@ -39,29 +41,65 @@ export const voiceNameOf = (info: VoiceInfo): string =>
 export class Ensemble {
   /** The voices at work or saying how it went, in the order they joined. */
   readonly voices: Voice[] = []
-  /** Every subagent heard of: one that works again after it ended (a teammate woken, an agent resumed) plays again. */
+  /**
+   * The latest subagents heard of, up to `KNOWN`, the oldest first: one that
+   * works again after it ended (a teammate woken, an agent resumed) plays
+   * again, so one is kept after its voice has left.
+   */
   private readonly known = new Map<string, VoiceInfo>()
-  /** How many have joined: the next one's color. */
-  private joined = 0
 
   /** A subagent heard of, not at work: it plays if it works again. */
   know(id: string, info: VoiceInfo) {
+    this.known.delete(id)
     this.known.set(id, info)
+    if (this.known.size > KNOWN) this.known.delete(this.known.keys().next().value!)
   }
 
   /** A subagent starts: its voice. One still on stage keeps its own, at work again. */
   join(id: string, info: VoiceInfo): Voice {
-    this.known.set(id, info)
+    this.know(id, info)
     const had = this.find(id)
-    if (had !== undefined) {
-      had.outcome = undefined
-      had.endedAt = undefined
-      return had
-    }
-    const color = VOICE_COLORS[this.joined++ % VOICE_COLORS.length]!
-    const voice = { id, name: voiceNameOf(info), color, spectrum: new Spectrum() }
+    if (had !== undefined) return this.resume(had)
+    const voice = { id, name: voiceNameOf(info), color: this.freeColor(), spectrum: new Spectrum() }
     this.voices.push(voice)
     return voice
+  }
+
+  /**
+   * Subagent `id`'s spawn is answered, with what it was given. One never heard
+   * of joins. One whose loop started first keeps its voice as it is, at work or
+   * ended, named as its spawn names it: its start may have been taken for that
+   * of another spawn of its type.
+   */
+  spawned(id: string, info: VoiceInfo) {
+    const voice = this.find(id)
+    if (voice === undefined && !this.known.has(id)) {
+      this.join(id, info)
+      return
+    }
+    if (voice !== undefined) voice.name = voiceNameOf(info)
+    this.know(id, info)
+  }
+
+  /** A voice at work again, if it had ended: it no longer says how it went. */
+  private resume(voice: Voice): Voice {
+    voice.outcome = undefined
+    voice.endedAt = undefined
+    return voice
+  }
+
+  /** The first color no voice on stage has; with all of them taken, the one the fewest have. */
+  private freeColor(): number {
+    let free = VOICE_COLORS[0]!
+    let fewest = Infinity
+    for (const color of VOICE_COLORS) {
+      const n = this.voices.filter(voice => voice.color === color).length
+      if (n < fewest) {
+        free = color
+        fewest = n
+      }
+    }
+    return free
   }
 
   /** The voice of subagent `id` on stage, at work or fading. */
@@ -76,7 +114,7 @@ export class Ensemble {
   voiceOf(id: string | undefined): Voice | undefined {
     if (id === undefined) return undefined
     const voice = this.find(id)
-    if (voice !== undefined && voice.outcome === undefined) return voice
+    if (voice !== undefined) return voice.outcome === undefined ? voice : this.resume(voice)
     const info = this.known.get(id)
     return info === undefined ? undefined : this.join(id, info)
   }
@@ -86,9 +124,9 @@ export class Ensemble {
    * how it went, and fades. False for a loop never heard of, which is not a voice's.
    */
   end(id: string, reason: string): boolean {
-    if (!this.known.has(id)) return false
     const voice = this.find(id)
-    if (voice === undefined || voice.outcome !== undefined) return true
+    if (voice === undefined) return this.known.has(id)
+    if (voice.outcome !== undefined) return true
     voice.spectrum.ended(reason)
     voice.outcome = reason === 'answer' ? 'done' : reason === 'aborted' ? 'stopped' : 'failed'
     voice.endedAt = voice.spectrum.now
@@ -107,5 +145,14 @@ export class Ensemble {
   /** No subagent at work or saying how it went. */
   isCalm(): boolean {
     return this.voices.length === 0
+  }
+
+  /**
+   * Nothing moving in any channel: each subagent on stage works without a
+   * sound (on background work of its own, or one whose end never came here),
+   * and none says how it went. Its channel stands still, and wants no frames.
+   */
+  isStill(): boolean {
+    return this.voices.every(voice => voice.outcome === undefined && voice.spectrum.isQuiet())
   }
 }

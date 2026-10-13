@@ -139,8 +139,14 @@ export class Spectrum {
   readonly calls: Call[] = []
   /** Tool calls put to the person, until they are answered. */
   private readonly asks = new Set<Ask>()
-  /** Asks past their grace, by instrument: their held notes rest while they wait. */
+  /** Asks past their grace, by instrument: the vamp pulses their bands. */
   private readonly cued = new Int32Array(N)
+  /**
+   * Of those, the ones for a call of this spectrum's, by instrument: as many of
+   * its held notes rest while they wait. A subagent's ask, heard here too, has
+   * its call on the subagent's own spectrum, and rests none of these.
+   */
+  private readonly hushed = new Int32Array(N)
   /** How present the vamp is: rises once an ask is past its grace, falls once it is answered. */
   cue = 0
   /** How long the vamp has played: where it is in its bars, and whether it has thinned out. */
@@ -374,14 +380,20 @@ export class Spectrum {
     if (this.demo.isPlaying) this.demo.step(ms)
     const t = this.now
     this.cued.fill(0)
-    for (const ask of this.asks) if (this.isCued(ask)) this.cued[INDEX[ask.source]] = this.cued[INDEX[ask.source]]! + 1
+    this.hushed.fill(0)
+    for (const ask of this.asks) {
+      if (!this.isCued(ask)) continue
+      const i = INDEX[ask.source]
+      this.cued[i] = this.cued[i]! + 1
+      if (ask.call !== undefined) this.hushed[i] = this.hushed[i]! + 1
+    }
     const decay = fade(DECAY, ms)
     // A stream is a rate: what came in over the step, as much as came in a frame.
     const frames = Math.max(ms, FRAME_MS / 4) / FRAME_MS
     for (let i = 0; i < N; i++) {
       const hit = 1 - Math.exp(-(this.hits[i]! + this.feed[i]! / frames))
       let next = Math.max(this.level[i]! * decay, hit)
-      if (this.held[i]! > this.cued[i]!) next = Math.max(next, 0.22 + 0.08 * Math.sin(cycle(t, 830) + i * 1.7))
+      if (this.held[i]! > this.hushed[i]!) next = Math.max(next, 0.22 + 0.08 * Math.sin(cycle(t, 830) + i * 1.7))
       this.level[i] = next < 0.004 ? 0 : next
       this.hits[i] = 0
       this.feed[i] = 0
@@ -557,7 +569,7 @@ export class Spectrum {
   isCalm(): boolean {
     return (
       this.level.every(l => l === 0) &&
-      this.held.every((h, i) => h <= this.cued[i]!) &&
+      this.held.every((h, i) => h <= this.hushed[i]!) &&
       this.thinking === 0 &&
       this.mind === 0 &&
       this.sweep === undefined &&

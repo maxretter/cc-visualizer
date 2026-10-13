@@ -76,12 +76,16 @@ export class Channels {
     return this.seats.some(seat => seat.voice === voice && !seat.isLeaving)
   }
 
+  /** The voices waiting for a channel: at work, with none here. One that ended while it waited never takes one. */
+  private waiting(ensemble: Ensemble): Voice[] {
+    return ensemble.voices.filter(voice => voice.outcome === undefined && !this.seats.some(seat => seat.voice === voice))
+  }
+
   /** Voices gone leave their channels; those waiting open new ones at the end, while the channels staying leave room. */
   private seat(ensemble: Ensemble, focus?: Voice) {
     for (const seat of this.seats) if (!ensemble.voices.includes(seat.voice)) seat.isLeaving = true
     let staying = this.seats.filter(seat => !seat.isLeaving).length
-    for (const voice of ensemble.voices) {
-      if (this.seats.some(seat => seat.voice === voice)) continue
+    for (const voice of this.waiting(ensemble)) {
       if (staying >= this.capacity) break
       const open = this.isFresh ? 1 : 0
       // Made with the subagent in focus on stage, its channel has grown already.
@@ -134,7 +138,7 @@ export class Channels {
    */
   draw(words: Uint32Array, columns: number, left: number, theme: VizTheme, ensemble: Ensemble, tone: Tone) {
     const { rows } = this
-    const waiting = ensemble.voices.filter(voice => !this.seats.some(seat => seat.voice === voice)).length
+    const waiting = this.waiting(ensemble).length
     const more = waiting > 0 ? `+${waiting}` : ''
     let at = left
     this.seats.forEach((seat, i) => {

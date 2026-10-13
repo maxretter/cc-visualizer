@@ -1,7 +1,7 @@
 // Helpers the tests share: reading Raster cells, a session staged with the
 // plugin in it, and the drawings the tests mount.
 
-import type { ConfigRow, On, SessionUsage, ToolCallResult } from 'claude-code'
+import type { ConfigRow, On, PermissionRequestDecision, SessionUsage, ToolCallResult } from 'claude-code'
 import { mock } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
@@ -61,9 +61,17 @@ export const prefsStore = (on: On, initial?: Record<string, unknown>) => {
 
 /**
  * How `staged` sets the session up: the `/viz` mode, the context, the
- * environment, Claude Code's theme, and whether the terminal has room for the pane.
+ * environment, Claude Code's theme, whether the terminal has room for the
+ * pane, and what a settings hook answers a permission request with, if anything.
  */
-export type Stage = { mode?: string; context?: () => object; env?: Record<string, string>; theme?: string; hasRoom?: boolean }
+export type Stage = {
+  mode?: string
+  context?: () => object
+  env?: Record<string, string>
+  theme?: string
+  hasRoom?: boolean
+  decision?: PermissionRequestDecision
+}
 
 /** How red the bars are: red over green, on average over the cells drawn. */
 export const redness = (cells: string, columns = 80) => {
@@ -88,7 +96,7 @@ export const thirds = (cells: string, columns = 80) => {
  * its frames kept: tool calls run until the test finishes them, each check
  * beneath asks, and the context, the environment and the theme are as given.
  */
-export const staged = async ($: Engine, on: On, { mode = 'always', context, env = {}, theme, hasRoom = true }: Stage = {}) => {
+export const staged = async ($: Engine, on: On, { mode = 'always', context, env = {}, theme, hasRoom = true, decision }: Stage = {}) => {
   const clock = mock.clock(on)
   mock.store(on)
   mock.env(on, env)
@@ -123,7 +131,7 @@ export const staged = async ($: Engine, on: On, { mode = 'always', context, env 
   const running = new Map<string, (ran: ToolCallResult) => void>()
   on('tool.call', ($, e) => new Promise<ToolCallResult>(resolve => running.set(e.tool_use_id ?? '', resolve)))
   on('tool.check', () => ({ decision: 'ask' as const }))
-  on('classic.PermissionRequest', () => ({}))
+  on('classic.PermissionRequest', () => (decision === undefined ? {} : { decision }))
   on('classic.PostToolUseFailure', () => ({}))
   on('classic.SessionStart', () => ({}))
   on('config.set', ($, e) => {

@@ -1,4 +1,4 @@
-import type { On } from 'claude-code'
+import type { AgentSpawnResult, On } from 'claude-code'
 import { describe, expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
@@ -9,7 +9,7 @@ import { Ensemble } from '../hooks/engine/ensemble'
 import { FRAME_MS } from '../hooks/engine/math'
 import { Spectrum } from '../hooks/engine/spectrum'
 import { trail } from '../hooks/engine/trail'
-import { band, colors, staged, text } from './support'
+import { band, colors, redness, staged, text } from './support'
 
 describe('subagents', () => {
   /** Bar glyphs above the floor, as many as stand in a drawing's rows below its label. */
@@ -52,6 +52,50 @@ describe('subagents', () => {
     for (let t = 0; t < 5000; t += 100) ensemble.step(100)
     expect(ensemble.isCalm()).toBe(true)
     expect(ensemble.voiceOf('a1')?.name).toBe('scout')
+  })
+
+  test('each joins in a color no other on stage has: one that left frees its own', () => {
+    const ensemble = new Ensemble()
+    const voices = Array.from({ length: 8 }, (_, i) => ensemble.join(`a${i}`, { name: `agent ${i}` }))
+    expect(new Set(voices.map(voice => voice.color)).size).toBe(8)
+    ensemble.end('a1', 'answer')
+    for (let t = 0; t < 3_100; t += 100) ensemble.step(100)
+    // The ninth, while the first still plays: the color the second left.
+    expect(ensemble.join('a8', { name: 'agent 8' }).color).toBe(voices[1]!.color)
+    expect(new Set(ensemble.voices.map(voice => voice.color)).size).toBe(8)
+  })
+
+  test('one at work without a sound stands still, on stage: its channel wants no frames until it plays or ends', () => {
+    const ensemble = new Ensemble()
+    const scout = ensemble.join('a1', { name: 'scout' })
+    ensemble.step()
+    expect(ensemble.isStill()).toBe(true)
+    expect(ensemble.isCalm()).toBe(false)
+    const call = scout.spectrum.startCall('Read')
+    ensemble.step()
+    expect(ensemble.isStill()).toBe(false)
+    scout.spectrum.endCall(call)
+    for (let t = 0; t < 4_000; t += FRAME_MS) ensemble.step()
+    expect(ensemble.isStill()).toBe(true)
+    // Saying how it went, it moves until it has left.
+    ensemble.end('a1', 'answer')
+    for (let t = 0; t < 2_900; t += 100) ensemble.step(100)
+    expect(ensemble.isStill()).toBe(false)
+    ensemble.step(100)
+    expect(ensemble.isStill()).toBe(true)
+  })
+
+  test('the latest subagents heard of are remembered, to play again; the oldest are let go', () => {
+    const ensemble = new Ensemble()
+    for (let i = 0; i < 300; i++) {
+      ensemble.join(`a${i}`, { name: `agent ${i}` })
+      ensemble.end(`a${i}`, 'answer')
+    }
+    for (let t = 0; t < 3_100; t += 100) ensemble.step(100)
+    expect(ensemble.isCalm()).toBe(true)
+    expect(ensemble.voiceOf('a299')?.name).toBe('agent 299')
+    expect(ensemble.voiceOf('a0')).toBeUndefined()
+    expect(ensemble.end('a0', 'answer')).toBe(false)
   })
 
   test('channels fit beside a main spectrum that keeps half the width, and at least 32 columns', () => {
@@ -172,6 +216,24 @@ describe('subagents', () => {
     expect(rows()[0]!.slice(board.bars.columns)).toMatch(/^ {2}two\s+three\s*$/)
     expect(board.bars.columns).toBe(main)
     for (const width of widths) expect(Math.abs(width - main)).toBeLessThanOrEqual(1)
+  })
+
+  test('a channel freed goes to an agent still at work: one that finished while it waited never takes one', () => {
+    const { ensemble, step, rows } = staging()
+    for (const name of ['one', 'two', 'three', 'four']) ensemble.join(name, { name })
+    step()
+    const main = 80 - 2 * CHANNEL
+    const top = () => rows()[0]!.slice(main)
+    expect(top()).toMatch(/^ {2}one\s+two\s+\+2$/)
+    ensemble.end('one', 'answer')
+    for (let t = 0; t < 2_000; t += 100) step(100)
+    ensemble.end('three', 'answer')
+    step()
+    // Three no longer waits.
+    expect(top()).toMatch(/^ {2}one done\s+two\s+\+1$/)
+    // One closes while three still says it is done: four opens in its place.
+    for (let t = 0; t < 1_600; t += FRAME_MS) step()
+    expect(top()).toMatch(/^ {2}two\s+four\s*$/)
   })
 
   test('the demo brings in two subagents, which play, say they are done, and leave before it ends', () => {
@@ -342,23 +404,39 @@ describe('subagents, through the plugin', () => {
     let started = 0
     on('agent.spawn', () => ({ model: 'claude-haiku-5-5', agentId: `a${++started}` }))
   }
-  const spawn = ($: Engine, name: string) =>
+  /** Spawns as the Agent tool does; `isTeammate` starts a teammate of the session's team. */
+  const spawn = ($: Engine, name: string, isTeammate = false) =>
     $.agent.spawn({
       tool_use_id: `spawn-${name}`,
       prompt: 'Look around.',
       description: `Look for ${name}`,
-      subagentType: 'Explore',
+      subagentType: isTeammate ? 'teammate' : 'Explore',
       provider: { plugin: 'engine', tier: 'core' },
       parentModel: 'claude-opus-5-5',
       background: true,
       fork: false,
       name,
+      ...(isTeammate ? { isTeammate: true as const } : {}),
     })
+  /** Spawns the test answers when it likes, each by its name with an id: the subagent's loop may start, and end, before then. */
+  const answered = (on: On) => {
+    const answers = new Map<string, (spawned: AgentSpawnResult) => void>()
+    on('agent.spawn', ($, e) => new Promise<AgentSpawnResult>(resolve => answers.set(e.name ?? '', resolve)))
+    return (name: string, agentId: string) => answers.get(name)?.({ model: 'claude-haiku-5-5', agentId })
+  }
   /** A call made in subagent `agentId`'s loop: a session stamps the loop on it, which `$.tool.call` names no field for. */
   const inLoop = (agentId: string) => ({ agentId })
   /** A drawing's columns, as mounted. */
   const columnsOf = async (ui: { find: (query: { type: 'Raster'; key: string }) => Promise<{ props: unknown } | undefined> }, key: string) =>
     ((await ui.find({ type: 'Raster', key }))?.props as { columns?: number } | undefined)?.columns
+  /** How red a drawing's bars are from column `from` to `to`, below its label row: red over green, on average over the cells drawn. */
+  const rednessOf = (cells: string, from: number, to: number) => {
+    const drawn = colors(cells, 80)
+      .slice(1)
+      .flatMap(row => row.slice(from, to))
+      .filter(c => c !== 0)
+    return drawn.reduce((sum, c) => sum + ((c >> 16) & 0xff) - ((c >> 8) & 0xff), 0) / Math.max(1, drawn.length)
+  }
 
   test('a subagent plays in a channel that opens at the right of the band, says when it is done, and closes', async ($, on) => {
     spawner(on)
@@ -396,7 +474,7 @@ describe('subagents, through the plugin', () => {
     await ui.unmount()
   })
 
-  test("a subagent's permission ask has its channel waiting, and the band waiting on you", async ($, on) => {
+  test("a subagent's permission ask has its channel waiting, and the band waiting on you, after the main loop's turn too", async ($, on) => {
     spawner(on)
     const { clock, ui, cells, finish } = await staged($, on)
     const top = () => text(cells(), 80)[0] ?? ''
@@ -404,6 +482,8 @@ describe('subagents, through the plugin', () => {
     const call = $.tool.call({ tool: 'Bash', command: 'ls', tool_use_id: 't1', ...inLoop(agentId) })
     await clock.settle()
     await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: { command: 'ls' }, agent_id: agentId })
+    // The main loop's turn ends with what is left of it, none of the subagent's.
+    await $.turn.complete({ reason: 'answer', answer: 'A scout is on it.', durationMs: 1000, isAborted: false, turnId: 'u1' })
     await clock.advance(3000)
     expect(top()).toMatch(/^\s*waiting on you/)
     expect(top().slice(80 - CHANNEL)).toContain('scout waiting')
@@ -413,6 +493,159 @@ describe('subagents, through the plugin', () => {
     await clock.advance(1000)
     expect(top()).not.toContain('waiting')
     await ui.unmount()
+  })
+
+  test("a subagent's tool that fails flashes its own channel red, not the main bars", async ($, on) => {
+    spawner(on)
+    const { clock, ui, cells, finish } = await staged($, on)
+    const agentId = (await spawn($, 'scout')).agentId!
+    const call = $.tool.call({ tool: 'Bash', command: 'make', tool_use_id: 't1', ...inLoop(agentId) })
+    await clock.advance(600)
+    await $.classic.PostToolUseFailure({ tool_name: 'Bash', tool_input: { command: 'make' }, tool_use_id: 't1', error: 'Exit code 2', agent_id: agentId })
+    finish('t1', { result: 'Exit code 2', isError: true })
+    await call
+    await clock.advance(100)
+    expect(rednessOf(cells(), 80 - CHANNEL, 80)).toBeGreaterThan(rednessOf(cells(), 0, 80 - CHANNEL) + 30)
+    await ui.unmount()
+  })
+
+  test("a subagent's turn that is interrupted says it stopped, and one that errs says it failed", async ($, on) => {
+    spawner(on)
+    const { clock, ui, cells } = await staged($, on)
+    const top = () => text(cells(), 80)[0] ?? ''
+    const one = (await spawn($, 'one')).agentId!
+    const two = (await spawn($, 'two')).agentId!
+    await clock.advance(600)
+    await $.turn.complete({ reason: 'aborted', answer: '', durationMs: 1000, isAborted: true, turnId: 'u1', agentId: one })
+    await $.turn.complete({ reason: 'error', answer: '', durationMs: 1000, isAborted: false, turnId: 'u2', agentId: two })
+    await clock.advance(200)
+    expect(top().slice(80 - 2 * CHANNEL)).toMatch(/^ {2}one stopped\s+two failed\s*$/)
+    await clock.advance(5000)
+    expect(top()).not.toMatch(/one|two/)
+    await ui.unmount()
+  })
+
+  test('a teammate in a terminal pane of its own gets no channel: nothing of it plays here', async ($, on) => {
+    // A teammate in a pane runs no loop here, and its id is its address; one in this process has an id of its own.
+    on('agent.spawn', ($, e) => ({ model: 'claude-haiku-5-5', agentId: e.name === 'pane' ? 'pane@crew' : 'a1', teammateId: `${e.name}@crew` }))
+    const { clock, ui, cells } = await staged($, on)
+    const top = () => text(cells(), 80)[0] ?? ''
+    await spawn($, 'pane', true)
+    await spawn($, 'mate', true)
+    await clock.advance(600)
+    expect(top().slice(80 - CHANNEL)).toMatch(/^ {2}mate/)
+    expect(top()).not.toContain('pane')
+    await ui.unmount()
+  })
+
+  test('a subagent that stops says it is done and closes, though its turn never ends here; one a hook sends back to work plays on', async ($, on) => {
+    spawner(on)
+    let verdict: { block?: string } = {}
+    on('classic.SubagentStop', () => verdict)
+    const { clock, ui, cells } = await staged($, on)
+    const top = () => text(cells(), 80)[0] ?? ''
+    const agentId = (await spawn($, 'scout')).agentId!
+    await clock.advance(600)
+    // `stop_hook_active`: a stop that comes after a hook sent it back to work.
+    const stop = (isAgain: boolean) => $.classic.SubagentStop({ agent_id: agentId, agent_type: 'Explore', stop_hook_active: isAgain, agent_transcript_path: '' })
+    verdict = { block: 'The tests still fail.' }
+    await stop(false)
+    await clock.advance(200)
+    expect(top().slice(80 - CHANNEL)).toMatch(/^ {2}scout\s*$/)
+    verdict = {}
+    await stop(true)
+    await clock.advance(200)
+    expect(top().slice(80 - CHANNEL)).toMatch(/^ {2}scout done/)
+    await clock.advance(5000)
+    expect(top()).not.toContain('scout')
+    await ui.unmount()
+  })
+
+  test('subagents whose loops start before their spawns are answered play their first steps in their channels, each named once answered', async ($, on) => {
+    const answer = answered(on)
+    on('classic.SubagentStart', () => ({}))
+    const { clock, ui, cells, finish } = await staged($, on)
+    const channels = () => (text(cells(), 80)[0] ?? '').slice(80 - 2 * CHANNEL)
+    const spawning = [spawn($, 'scout'), spawn($, 'audit')]
+    await clock.settle()
+    // Both of one type, and the second's loop starts first: it is taken for the first's until they are answered.
+    await $.classic.SubagentStart({ agent_id: 'a2', agent_type: 'Explore' })
+    await $.classic.SubagentStart({ agent_id: 'a1', agent_type: 'Explore' })
+    const call = $.tool.call({ tool: 'Read', file_path: '/src/auth.ts', tool_use_id: 't1', ...inLoop('a2') })
+    await clock.advance(600)
+    expect(channels()).toMatch(/^ {2}\S+ [⠁-⣿] Read/)
+    expect((text(cells(), 80)[0] ?? '').slice(0, 80 - 2 * CHANNEL)).not.toContain('Read')
+    answer('scout', 'a1')
+    answer('audit', 'a2')
+    await Promise.all(spawning)
+    await clock.advance(100)
+    expect(channels()).toMatch(/^ {2}audit [⠁-⣿] Read\s+scout\s*$/)
+    finish('t1')
+    await call
+    await ui.unmount()
+  })
+
+  test('a subagent whose loop starts and ends before its spawn is answered says how it went, and closes', async ($, on) => {
+    const answer = answered(on)
+    on('classic.SubagentStart', () => ({}))
+    const { clock, ui, cells } = await staged($, on)
+    const top = () => text(cells(), 80)[0] ?? ''
+    const spawning = spawn($, 'scout')
+    await clock.settle()
+    await $.classic.SubagentStart({ agent_id: 'a1', agent_type: 'Explore' })
+    await clock.advance(100)
+    await $.turn.complete({ reason: 'error', answer: '', durationMs: 10, isAborted: false, turnId: 'u1', agentId: 'a1' })
+    // Answered once it has ended: it stays ended.
+    answer('scout', 'a1')
+    await spawning
+    await clock.advance(600)
+    expect(top().slice(80 - CHANNEL)).toMatch(/^ {2}scout failed/)
+    await clock.advance(5000)
+    expect(top()).not.toContain('scout')
+    await ui.unmount()
+  })
+
+  test('a subagent whose loop ends, never heard of, before its spawn is answered opens no channel that would never close, and plays if it works again', async ($, on) => {
+    const answer = answered(on)
+    const { clock, ui, cells, finish } = await staged($, on)
+    const top = () => text(cells(), 80)[0] ?? ''
+    await clock.advance(200)
+    const calm = redness(cells())
+    const spawning = spawn($, 'scout')
+    await clock.settle()
+    // It fails at once: the main bars flash for it, as for a loop never heard of.
+    await $.turn.complete({ reason: 'error', answer: '', durationMs: 10, isAborted: false, turnId: 'u1', agentId: 'a1' })
+    answer('scout', 'a1')
+    await spawning
+    await clock.advance(100)
+    expect(redness(cells())).toBeGreaterThan(calm + 40)
+    await clock.advance(1000)
+    expect(top()).not.toContain('scout')
+    // Resumed, it is the scout.
+    const call = $.tool.call({ tool: 'Read', file_path: '/src/auth.ts', tool_use_id: 't1', ...inLoop('a1') })
+    await clock.advance(600)
+    expect(top().slice(80 - CHANNEL)).toMatch(/^ {2}scout [⠁-⣿] Read/)
+    finish('t1')
+    await call
+    await ui.unmount()
+  })
+
+  test('in /viz auto, a subagent at work without a sound lets the band go, and brings it back as it stops', async ($, on) => {
+    spawner(on)
+    on('classic.SubagentStop', () => ({}))
+    const { clock, ui } = await staged($, on, { mode: 'auto' })
+    const agentId = (await spawn($, 'scout')).agentId!
+    await clock.advance(2000)
+    await ui.unmount()
+    // Claude rests, and nothing moves: the band is down, though the subagent is on stage.
+    const resting = await $.ui.mount(band(false))
+    expect(await resting.find({ type: 'Raster', key: 'band' })).toBeUndefined()
+    await resting.unmount()
+    // It stops: its channel says so, on a band up again.
+    await $.classic.SubagentStop({ agent_id: agentId, agent_type: 'Explore', stop_hook_active: false, agent_transcript_path: '' })
+    const ended = await $.ui.mount(band(false))
+    expect(await ended.find({ type: 'Raster', key: 'band' })).toBeDefined()
+    await ended.unmount()
   })
 
   test('/viz demo plays its subagents in channels at the right of the band, and opens each in turn', async ($, on) => {
@@ -503,12 +736,17 @@ describe('subagents, through the plugin', () => {
       value: [
         { id: 'a1', description: 'Map the API', type: 'Explore', status: 'running' as const },
         { id: 'a2', description: 'Old job', type: 'Explore', status: 'completed' as const },
+        { id: 'a3', description: 'Plan it', type: 'Plan', status: 'pending' as const },
+        { id: 'a4', description: 'Wait on CI', type: 'general-purpose', status: 'waiting' as const },
+        // A teammate in a terminal pane of its own, its id its address: its pane may have closed long ago.
+        { id: 'pane@crew', teammateId: 'pane@crew', name: 'pane', description: 'Gone', type: 'teammate', status: 'running' as const },
       ],
     }))
     const { clock, ui, cells } = await staged($, on)
     await clock.advance(FRAME_MS)
     const top = text(cells(), 80)[0] ?? ''
-    expect(top.slice(80 - CHANNEL)).toMatch(/^ {2}Map the API/)
+    // Two channels fit; the third at work waits for one.
+    expect(top.slice(80 - 2 * CHANNEL)).toMatch(/^ {2}Map the API\s+Plan it\s+\+1$/)
     expect(top).not.toContain('Old job')
     await ui.unmount()
   })

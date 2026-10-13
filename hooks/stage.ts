@@ -133,7 +133,7 @@ export class Stage {
       if (site.legend) blit(site, site.legend, site.board.legend(prefs.theme, tone))
     }
     return pace({
-      isCalm: spectrum.isCalm() && ensemble.isCalm(),
+      isCalm: spectrum.isCalm() && ensemble.isStill(),
       isAmbient: spectrum.ambient,
       isResting: spectrum.isResting(),
       isQuiet: spectrum.isQuiet(),
