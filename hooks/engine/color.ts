@@ -72,12 +72,16 @@ export function legible(color: number, tone: Tone): number {
  * Claude Code's theme as a tone: a light theme reads light, a dark one dark,
  * and `auto` (Claude Code reads the terminal itself) by `COLORFGBG`, which some
  * terminals set (`15;0`, white on black), else dark, as most terminals are.
+ * Its last field that is set is the background, read when it is one of the 16
+ * colors: 7 and 9 to 15 light, the rest dark. Anything else (`default`, a color
+ * of 256, `0x0f`) is no reading.
  */
 export function toneOf(theme: unknown, colorfgbg?: string): Tone {
   if (typeof theme === 'string' && theme.startsWith('light')) return 'light'
   if (typeof theme === 'string' && theme.startsWith('dark')) return 'dark'
-  const background = Number(colorfgbg?.split(';').at(-1))
-  return Number.isInteger(background) && (background === 7 || background >= 9) ? 'light' : 'dark'
+  const field = colorfgbg?.split(';').findLast(f => f !== '')
+  const background = field !== undefined && /^\d+$/.test(field) ? Number(field) : undefined
+  return background === 7 || (background !== undefined && background >= 9 && background <= 15) ? 'light' : 'dark'
 }
 
 /**
