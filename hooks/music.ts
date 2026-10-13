@@ -153,11 +153,12 @@ export function music(on: On, stage: Stage) {
   })
 
   // The person is asked to allow a call: unless an answer comes within the grace,
-  // its held note rests and the vamp plays until it is answered. A settings hook
-  // beneath may answer it, and then nobody waits on the person. Only asks that
-  // reach the person raise this, not the ones auto mode's classifier settles.
+  // its held note rests and the vamp plays until it is answered. Only asks that
+  // reach the person raise this, not the ones auto mode's classifier settles. A
+  // settings hook beneath may answer it, and its answer is not read here: a call
+  // it refuses ends at once, one it lets run vamps if it runs past the grace.
   // It watches, and passes the request on unchanged.
-  on('classic.PermissionRequest', async (_, e, next) => {
+  on('classic.PermissionRequest', (_, e, next) => {
     const id = requestFor(checks, e.tool_name, e.agent_id, e.tool_input)
     if (id !== undefined) {
       checks.delete(id)
@@ -165,10 +166,8 @@ export function music(on: On, stage: Stage) {
       asks.set(id, ask(running?.owner ?? spectrum, running?.call.source ?? sourceOf(e.tool_name), running?.call))
       stage.wake()
     }
-    const decided = await next(e)
-    if (id !== undefined && decided.decision !== undefined) answer(id)
 
-    return decided
+    return next(e)
   })
 
   // The run-in-background pill shows under a call once it runs: the ask was answered.
