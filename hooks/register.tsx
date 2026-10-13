@@ -7,7 +7,7 @@
 import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register, Timer } from 'claude-code'
 
-import type { VizSize, VizTheme } from '../types'
+import type { VizMode, VizSize, VizTheme } from '../types'
 import type { Layout } from './engine/bars'
 import { DOCTOR_ROWS, swatches } from './engine/doctor'
 import { FRAME_MS } from './engine/math'
@@ -26,12 +26,15 @@ import {
   factsOf,
   isAmbient,
   isBandShown,
+  isMode,
+  isPlace,
+  isSize,
+  isTheme,
   measuredFrom,
   percentOf,
   prefsFrom,
-  savedOf,
 } from './viz'
-import type { Measured, Prefs } from './viz'
+import type { Measured, Prefs, View } from './viz'
 
 const PANE = 'viz'
 const BAND_ROWS = 5
@@ -45,8 +48,8 @@ const wide = (columns: number): Layout => ({ width: columns >= 30 ? 2 : 1, gap: 
 const MINI_NAMES = 56
 /** How long between tries at a drawing whose frames the engine refuses. */
 const RETRY = 500
-/** How long after a setting changes to read it again: by then it has been made, or refused. */
-const SETTLED = 100
+/** The column of names beside the doctor's swatches. */
+const DOCTOR_NAMES = 8
 
 // The prefs the drawings read, published from the plugin's own copy, and what plays.
 const mode = atom({ plugin: 'visualizer', key: 'mode' } as const, DEFAULTS.mode)
@@ -57,6 +60,11 @@ const isPlaying = atom({ plugin: 'visualizer', key: 'isPlaying' } as const, fals
 const isPaneOpen = atom({ plugin: 'visualizer', key: 'isPaneOpen' } as const, false)
 
 const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, Math.floor(n)))
+
+/** A value read back from the state, checked: another plugin may have rewritten it. Else `own`, the plugin's copy. */
+function checked<T>(is: (value: unknown) => value is T, value: unknown, own: T): T {
+  return is(value) ? value : own
+}
 
 /** The context window now, with its breakdown: the meter, and where its top is. */
 async function measureContext($: EngineInterface): Promise<Measured> {
@@ -69,12 +77,48 @@ async function themeOf($: EngineInterface): Promise<unknown> {
   return (await $.config.list().catch(() => [])).find(row => row.key === 'theme')?.value
 }
 
-/** The prefs, published for the drawings, which redraw as they change. */
+/** The prefs, published for the drawings, which redraw as they change: each written only if it did. */
 async function publish($: EngineInterface, prefs: Prefs) {
-  await update($, mode, () => prefs.mode)
-  await update($, theme, () => prefs.theme)
-  await update($, size, () => prefs.size)
-  await update($, place, () => prefs.place)
+  const [m, t, s, p] = await Promise.all([read($, mode), read($, theme), read($, size), read($, place)])
+  if (m !== prefs.mode) await update($, mode, () => prefs.mode)
+  if (t !== prefs.theme) await update($, theme, () => prefs.theme)
+  if (s !== prefs.size) await update($, size, () => prefs.size)
+  if (p !== prefs.place) await update($, place, () => prefs.place)
+}
+
+/** Where the band goes and whether it is on, as a drawing reads them back: checked, else as `own` has them. */
+async function placedOf($: EngineInterface, own: Prefs) {
+  const [m, p] = await Promise.all([read($, mode), read($, place)])
+  return { mode: checked(isMode, m, own.mode), place: checked(isPlace, p, own.place) }
+}
+
+/** The band's look, as a drawing reads it back: checked, else as `own` has it. */
+async function looksOf($: EngineInterface, own: Prefs) {
+  const [t, s] = await Promise.all([read($, theme), read($, size)])
+  return { theme: checked(isTheme, t, own.theme), size: checked(isSize, s, own.size) }
+}
+
+/**
+ * What the band at the prompt is told. What plays matters only in auto while
+ * Claude rests, and is read only then: a change of pace redraws no drawing it
+ * cannot move.
+ */
+async function viewOf($: EngineInterface, m: VizMode, props: { isWorking: boolean; hasSurvey?: boolean }): Promise<View> {
+  const [playing, paneOpen] = await Promise.all([m === 'auto' && !props.isWorking ? read($, isPlaying) : false, read($, isPaneOpen)])
+  return { surface: 'terminal', isWorking: props.isWorking, hasSurvey: props.hasSurvey, isPlaying: playing === true, isPaneOpen: paneOpen === true }
+}
+
+/**
+ * Whether the pane is open and drawn, as the engine lists it, published for
+ * the band, which steps aside for it. Not as this plugin last said: a pane an
+ * unload closed never tells it, and one opened may wait undrawn.
+ */
+async function notePane($: EngineInterface) {
+  const isDrawn = await $.ui.panes().then(
+    panes => panes.some(pane => pane.id === PANE && pane.isPlaced),
+    () => false,
+  )
+  if ((await read($, isPaneOpen)) !== isDrawn) await update($, isPaneOpen, () => isDrawn)
 }
 
 export const register: Register = on => {
@@ -159,6 +203,8 @@ export const register: Register = on => {
     await $.command.register({ name: 'viz', description: 'Music visualizer for what Claude is doing', argumentHint: HINT, immediate: true })
     stage.prefs = prefsFrom(await $.store.get('prefs'))
     await publish($, stage.prefs)
+    // The pane as the engine has it: the state outlives a reload, and an unload's close never reached this plugin.
+    await notePane($).catch(() => {})
     // The terminal's background, as Claude Code's theme and the terminal tell it.
     stage.backdrop = {
       theme: await themeOf($),
@@ -207,33 +253,26 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // Claude Code's theme changes: once it has, the band follows it onto a light
-  // background or off one. It watches, and passes the change on unchanged.
-  on('config.set', { key: 'theme' }, ($, e, next) => {
-    void $.clock
-      .sleep(SETTLED)
-      .then(() => themeOf($))
-      .then(
-        setting => {
-          stage.backdrop = { ...stage.backdrop, theme: setting }
-          stage.retone()
-          if (sites.size > 0) stage.wake()
-        },
-        () => {},
-      )
+  // Claude Code's theme changes: once it is written, the band follows it onto
+  // a light background or off one. It watches, and passes the change on unchanged.
+  on('config.set', { key: 'theme' }, async ($, e, next) => {
+    const set = await next(e)
+    if (set.deny === undefined) {
+      stage.backdrop = { ...stage.backdrop, theme: set.value }
+      stage.retone()
+      if (sites.size > 0) stage.wake()
+    }
 
-    return next(e)
+    return set
   })
 
-  // Auto-compact turned on or off: once it has, the top of the meter moves.
-  // It watches, and passes the change on unchanged.
-  on('config.set', { key: 'autoCompact' }, ($, e, next) => {
-    void $.clock
-      .sleep(SETTLED)
-      .then(() => measureContext($))
-      .then(context => stage.remeasured(context), () => {})
+  // Auto-compact turned on or off: once it is written, the top of the meter
+  // moves. It watches, and passes the change on unchanged.
+  on('config.set', { key: 'autoCompact' }, async ($, e, next) => {
+    const set = await next(e)
+    if (set.deny === undefined) void measureContext($).then(context => stage.remeasured(context), () => {})
 
-    return next(e)
+    return set
   })
 
   // The conversation compacts: the tape rewinds until it is done, and the meter drains.
@@ -280,56 +319,53 @@ export const register: Register = on => {
     return <Raster key="band" columns={columns} rows={rows} cells={site.board.paint(t, spectrum, ensemble, true, stage.tone, focus)} />
   }
 
-  // Above the prompt: the band in the slot over the input.
+  // Above the prompt: the band in the slot over the input. Another surface
+  // draws the engine's own, having read nothing: it never redraws as the
+  // music plays, and the terminal's drawing is left as it is.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    const [m, t, s, p, playing, paneOpen] = await Promise.all([
-      read($, mode),
-      read($, theme),
-      read($, size),
-      read($, place),
-      read($, isPlaying),
-      read($, isPaneOpen),
-    ])
-    if (e.surface === 'terminal') {
-      stage.isWorking = e.props.isWorking
-      // A switch of transcript draws this again: told even while the band is down, for the band below.
-      stage.viewed = e.props.view?.agentId
-    }
-    if (e.surface === 'terminal' && e.props.bodyColumns !== stage.bodyColumns) {
+    if (e.surface !== 'terminal') return next(e)
+    stage.isWorking = e.props.isWorking
+    // A switch of transcript draws this again: told even while the band is down, for the band below.
+    stage.viewed = e.props.view?.agentId
+    const prefs = await placedOf($, stage.prefs)
+    if (e.props.bodyColumns !== stage.bodyColumns) {
       const had = stage.bodyColumns
       stage.bodyColumns = e.props.bodyColumns
       // A pane docked or closed: the band below the prompt fits itself again.
-      if (had !== undefined && p === 'below') $.ui.invalidate('ui.render')
+      if (had !== undefined && prefs.place === 'below') $.ui.invalidate('ui.render')
     }
-    const view = { surface: e.surface, isWorking: e.props.isWorking, hasSurvey: e.props.hasSurvey, isPlaying: playing, isPaneOpen: paneOpen }
-    if (e.surface !== 'terminal' || !isBandShown({ mode: m, place: p }, view, 'above')) {
+    // The band down: the engine's own. Off or below, it reads nothing more.
+    if (prefs.mode === 'off' || prefs.place !== 'above' || !isBandShown(prefs, await viewOf($, prefs.mode, e.props), 'above')) {
       sites.delete(e.requestId)
 
       return next(e)
     }
 
+    const { theme: t, size: s } = await looksOf($, stage.prefs)
     return band($.ui.resolve(e), e.requestId, s, t, e.props.bodyColumns, clamp(e.props.maxRows - 1, 1, 256))
   })
 
-  // Below the prompt: the band over the hint line, which stays as the engine draws it.
+  // Below the prompt: the band over the hint line, which stays as the engine
+  // draws it. Another surface, or the band off or above: the hint line as it
+  // comes, with nothing more read.
   on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
-    const [m, t, s, p, playing, paneOpen] = await Promise.all([
-      read($, mode),
-      read($, theme),
-      read($, size),
-      read($, place),
-      read($, isPlaying),
-      read($, isPaneOpen),
-    ])
-    if (e.surface === 'terminal') stage.isWorking = e.props.isWorking
+    if (e.surface !== 'terminal') return next(e)
+    stage.isWorking = e.props.isWorking
+    const prefs = await placedOf($, stage.prefs)
+    if (prefs.mode === 'off' || prefs.place !== 'below') {
+      sites.delete(e.requestId)
+
+      return next(e)
+    }
+    const view = await viewOf($, prefs.mode, e.props)
     const hint = await next(e)
-    const view = { surface: e.surface, isWorking: e.props.isWorking, isPlaying: playing, isPaneOpen: paneOpen }
-    if (e.surface !== 'terminal' || !isBandShown({ mode: m, place: p }, view, 'below')) {
+    if (!isBandShown(prefs, view, 'below')) {
       sites.delete(e.requestId)
 
       return hint
     }
 
+    const { theme: t, size: s } = await looksOf($, stage.prefs)
     const ui = $.ui.resolve(e)
     const { Box } = ui
     // As wide as the band above would be; until it has been told, the screen less its five.
@@ -344,13 +380,13 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const t = await read($, theme)
     if (e.surface !== 'terminal') {
       const { Text } = $.ui.resolve(e)
 
       return <Text dimColor>The visualizer draws in the terminal.</Text>
     }
 
+    const t = checked(isTheme, await read($, theme), stage.prefs.theme)
     const { Box, Raster } = $.ui.resolve(e)
     stage.viewed = e.props.view?.agentId
     const columns = clamp(e.props.bodyColumns, 1, 512)
@@ -365,11 +401,13 @@ export const register: Register = on => {
     )
   })
 
+  // The pane closed, by /viz, the person or another plugin: the band is back,
+  // unless the engine still lists the pane (a hook kept it open).
   on('ui.close', async ($, e, next) => {
     const closed = await next(e)
     if (e.id === PANE) {
       sites.delete(PANE)
-      await update($, isPaneOpen, () => false)
+      await notePane($)
     }
 
     return closed
@@ -378,17 +416,21 @@ export const register: Register = on => {
   // /viz doctor's report on the terminal: what it found, then a swatch for
   // each check beside its name, painted for the background the band paints for.
   on('ui.render', { component: 'CommandOutput', props: { command: 'viz' } }, async ($, e, next) => {
-    if (e.surface !== 'terminal' || e.props.isErrored || e.props.args.trim().split(/\s+/)[0] !== 'doctor') return next(e)
-    const t = await read($, theme)
+    if (e.surface !== 'terminal' || e.props.isErrored || e.props.args.trim().toLowerCase().split(/\s+/)[0] !== 'doctor') return next(e)
+    const t = checked(isTheme, await read($, theme), stage.prefs.theme)
     const { Box, Text, Raster } = $.ui.resolve(e)
-    const columns = 64
+    // As wide as the transcript has room for beside the names, 64 at most. The
+    // row is told no width of its own: the prompt's column, as the band above
+    // was told it, else the screen's, each less the engine's five.
+    const width = stage.bodyColumns ?? (e.viewport?.columns ?? 80) - 5
+    const columns = clamp(width - DOCTOR_NAMES, 1, 64)
 
     return (
       <Box flexDirection="column">
         <Text bold>Visualizer doctor</Text>
         <Text>{factsOf(e.props.text).join('\n')}</Text>
         <Box flexDirection="row" marginY={1}>
-          <Box flexDirection="column" width={8}>
+          <Box flexDirection="column" width={DOCTOR_NAMES}>
             <Text dimColor>{DOCTOR_ROWS.join('\n')}</Text>
           </Box>
           <Raster key="doctor" columns={columns} rows={DOCTOR_ROWS.length} cells={swatches(t, stage.tone, columns)} />
@@ -400,7 +442,7 @@ export const register: Register = on => {
 
   // /viz: what it does is viz.ts's to say; this does it.
   on('command.run', { command: 'viz' }, async ($, e) => {
-    const outcome = command(e.args, stage.prefs, { isPaneOpen: await read($, isPaneOpen), backdrop: stage.backdrop })
+    const outcome = command(e.args, stage.prefs, { isPaneOpen: (await read($, isPaneOpen)) === true, backdrop: stage.backdrop })
     if (outcome.isDoctor) {
       const [term, colorterm, program] = await Promise.all([
         $.env.get('TERM').catch(() => undefined),
@@ -413,17 +455,19 @@ export const register: Register = on => {
 
     let { text } = outcome
     if (outcome.pane === 'open') {
-      await update($, isPaneOpen, () => true)
-      const opened = await $.ui.open({ id: PANE, title: 'Visualizer', rows: 14 })
-      if (!opened.isPlaced) text = PANE_WAITS
+      // The band steps aside once the pane is drawn, not before: an open
+      // refused, or one that waits undrawn, leaves it where it was.
+      try {
+        const opened = await $.ui.open({ id: PANE, title: 'Visualizer', rows: 14 })
+        if (!opened.isPlaced) text = PANE_WAITS
+      } finally {
+        await notePane($)
+      }
     } else if (outcome.pane === 'close') {
       await $.ui.close({ id: PANE })
-      if (outcome.isOff) {
-        sites.clear()
-      } else {
-        sites.delete(PANE)
-        await update($, isPaneOpen, () => false)
-      }
+      if (outcome.isOff) sites.clear()
+      else sites.delete(PANE)
+      await notePane($)
     }
     if (outcome.isDemo) spectrum.playDemo(ensemble)
     const before = stage.prefs
@@ -431,10 +475,11 @@ export const register: Register = on => {
     stage.retone()
     await publish($, stage.prefs)
     // Save what this command changed over what is saved: another session may
-    // have saved the rest since this one read it.
+    // have saved the rest since this one read it. What is saved is read as the
+    // prefs, so a key no pref has, or a value none takes, is not kept.
     const changed = changes(before, stage.prefs)
     if (Object.keys(changed).length > 0) {
-      await $.store.set('prefs', { ...savedOf(await $.store.get('prefs')), ...changed })
+      await $.store.set('prefs', { ...prefsFrom(await $.store.get('prefs')), ...changed })
     }
     stage.wake()
 

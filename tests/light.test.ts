@@ -5,7 +5,7 @@ import { GROUND, legible, luminance, toneOf } from '../hooks/engine/color'
 import { swatches } from '../hooks/engine/doctor'
 import { SOURCES } from '../hooks/engine/sources'
 import { Spectrum } from '../hooks/engine/spectrum'
-import { colors, staged, text } from './support'
+import { band, colors, staged, text } from './support'
 
 describe('light terminals', () => {
   /** The background colors of Raster cells, row by row, the terminal's default as `0x01000000`. */
@@ -84,6 +84,19 @@ describe('light terminals', () => {
     await ui.unmount()
   })
 
+  test("a change of Claude Code's theme paints the next frame for it, once written", async ($, on) => {
+    const { clock, ui, cells } = await staged($, on, { theme: 'light' })
+    const feet = () => brightness(colors(cells(), 80).at(-1)!)
+    await clock.advance(500)
+    expect(feet()).toBeGreaterThan(0.4)
+
+    await $.config.set({ key: 'theme', value: 'dark', previous: 'light', provider: { plugin: 'engine', tier: 'core' }, origin: { kind: 'composer' } })
+    // A frame or so: no wait for the setting to settle.
+    await clock.advance(50)
+    expect(feet()).toBeLessThan(0.15)
+    await ui.unmount()
+  })
+
   test('/viz doctor reports the terminal, and draws its swatches', async ($, on) => {
     const { ui, viz } = await staged($, on, {
       env: { TERM: 'xterm-256color', COLORTERM: 'truecolor', COLORFGBG: '0;15' },
@@ -105,6 +118,24 @@ describe('light terminals', () => {
     expect(await drawn.find({ type: 'Text', text: 'Visualizer doctor' })).toBeDefined()
     expect((await drawn.find({ type: 'Raster', key: 'doctor' }))?.props).toMatchObject({ columns: 64, rows: 5 })
     await drawn.unmount()
+    await ui.unmount()
+  })
+
+  test("/viz Doctor, in any case, draws its swatches too, as wide as the transcript's room", async ($, on) => {
+    const { ui, viz } = await staged($, on)
+    const report = (await viz('Doctor')).text ?? ''
+    const doctor = { plugin: 'visualizer', surface: 'terminal' as const, component: 'CommandOutput' as const, requestId: 'doctor' }
+    const props = { command: 'viz', args: 'Doctor', text: report, isErrored: false }
+
+    const wide = await $.ui.mount({ ...doctor, props })
+    expect((await wide.find({ type: 'Raster', key: 'doctor' }))?.props).toMatchObject({ columns: 64, rows: 5 })
+    await wide.unmount()
+
+    // A pane docks beside the transcript: the band above is told the narrower column, and the swatches fit it.
+    await ui.redraw({ ...band(true).props, bodyColumns: 40 })
+    const narrow = await $.ui.mount({ ...doctor, props })
+    expect((await narrow.find({ type: 'Raster', key: 'doctor' }))?.props).toMatchObject({ columns: 32, rows: 5 })
+    await narrow.unmount()
     await ui.unmount()
   })
 })

@@ -1,7 +1,7 @@
 import type { On } from 'claude-code'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { PANE_WAITS } from '../hooks/viz'
+import { DEFAULTS, PANE_WAITS } from '../hooks/viz'
 import { band, pane, prefsStore, staged } from './support'
 
 describe('band', () => {
@@ -103,9 +103,52 @@ describe('the pane', () => {
     await ui.unmount()
   })
 
-  test('a pane the terminal has no room for yet says so', async ($, on) => {
-    const { ui, viz } = await staged($, on, { hasRoom: false })
+  test('a pane the terminal has no room for yet says so, and the band stays up meanwhile', async ($, on) => {
+    const { clock, ui, viz } = await staged($, on, { hasRoom: false })
     expect((await viz('pane')).text).toBe(PANE_WAITS)
+    await clock.advance(100)
+    expect(await ui.find({ type: 'Raster', key: 'band' })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('a pane refused leaves the band up', async ($, on) => {
+    const { clock, ui, viz } = await staged($, on, { isPaneRefused: true })
+    await viz('pane').catch(() => undefined)
+    await clock.advance(100)
+    expect(await ui.find({ type: 'Raster', key: 'band' })).toBeDefined()
+    await ui.unmount()
+  })
+
+  test('a pane an unload dropped holds the band aside no longer once the plugin starts again', async ($, on) => {
+    const { clock, ui, viz, unload } = await staged($, on)
+    await viz('pane')
+    await clock.advance(100)
+    expect(await ui.find({ type: 'Raster', key: 'band' })).toBeUndefined()
+
+    // The pane goes with an unload, which this plugin never hears of; the state outlives the reload.
+    unload()
+    await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+    await clock.advance(100)
+    expect(await ui.find({ type: 'Raster', key: 'band' })).toBeDefined()
+    await ui.unmount()
+  })
+})
+
+describe('other surfaces', () => {
+  test("a drawing on the desktop leaves the terminal's band playing", async ($, on) => {
+    const { clock, ui, blits, finish } = await staged($, on)
+    const call = $.tool.call({ tool: 'Bash', command: 'make', tool_use_id: 't1' })
+    await clock.advance(500)
+
+    // The desktop draws the same instance, by the same id.
+    const desktop = await $.ui.mount({ ...band(true), surface: 'desktop' as const })
+    expect(await desktop.find({ type: 'Raster', key: 'band' })).toBeUndefined()
+    const sent = blits('band')
+    await clock.advance(500)
+    expect(blits('band') - sent).toBeGreaterThan(5)
+    finish('t1')
+    await call
+    await desktop.unmount()
     await ui.unmount()
   })
 })
@@ -195,6 +238,14 @@ describe('place', () => {
     const writes = saved.length
     await $.command.run(run('pos below'))
     expect(saved).toHaveLength(writes)
+  })
+
+  test('/viz saves the prefs as they read, dropping what else the store held', async ($, on) => {
+    engine(on)
+    const saved = prefsStore(on, { theme: 'synthwave', size: 'huge', junk: 1 })
+
+    await $.command.run(run('pos below'))
+    expect(saved.at(-1)).toEqual({ ...DEFAULTS, theme: 'synthwave', place: 'below' })
   })
 
   test('the band below the prompt is as wide as the prompt, beside a docked pane too', async ($, on) => {

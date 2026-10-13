@@ -96,7 +96,7 @@ Its hooks, in `hooks/register.tsx` and `hooks/music.ts`:
 
 | Hook | What it does |
 | --- | --- |
-| `session.start` | registers `/viz`, restores your `/viz` settings, reads Claude Code's theme and `COLORFGBG` to tell a light background, reads the context window's fill, and lists the session's subagents, to give those still at work after a reload their channels back |
+| `session.start` | registers `/viz`, restores your `/viz` settings, asks whether its pane is still open, reads Claude Code's theme and `COLORFGBG` to tell a light background, reads the context window's fill, and lists the session's subagents, to give those still at work after a reload their channels back |
 | `prompt.edit` | plays your keys on a band that's already up |
 | `prompt.submit` | a sweep up the spectrum |
 | `turn.step` | plays the response as it streams: thinking, text, tool calls, their arguments; a subagent's in its channel |
@@ -105,13 +105,13 @@ Its hooks, in `hooks/register.tsx` and `hooks/music.ts`:
 | `agent.spawn` | when a subagent starts, gives it a channel, named as the Agent call named it. It decides nothing, and passes the spawn on as it came |
 | `classic.PostToolUseFailure` | a tool that failed flashes the bars red |
 | `classic.PermissionRequest` | when Claude Code is about to ask you to allow a tool, the band pulses amber until you answer. It decides nothing, and passes the request on as it came; the plugin has no hook on the permission decision itself |
-| `config.set` (`theme`, `autoCompact`) | when you change Claude Code's theme or auto-compact, it reads the new setting a moment later, to paint for the background or move the meter's top. The change passes on as it came |
+| `config.set` (`theme`, `autoCompact`) | when you change Claude Code's theme or auto-compact, it waits for the change to be written, then paints for the new background or measures the context window again to move the meter's top. The change passes on as it came |
 | `session.measure`, `session.compact`, `classic.SessionStart` | the context meter: its fill, a rewind while compacting, an estimate after `/clear` |
 | `ui.render` (`AbovePrompt`, `PromptHint`, `Pane`, `CommandOutput`, `ToolProgress`) | draws the band, the pane and `/viz doctor`'s swatches, and reads which transcript is in view, to put a subagent in focus; a tool's progress row means a permission ask was answered |
 | `ui.close` | notes that the pane closed |
 | `command.run` (`viz`) | answers `/viz` |
 
-- **Reads:** the environment variables `COLORFGBG`, to tell a light background, and, for `/viz doctor`, `TERM`, `COLORTERM` and `TERM_PROGRAM`; Claude Code's settings as `/config` lists them, every row, other plugins' among them, of which it keeps only `theme`; the session's context usage; the session's subagents, with their names, task descriptions, types and whether they're at work; your prompt as you edit it, to play your keys; each tool call's input, to tell which call a permission request is for, held in memory only while the call runs; and of the response as it streams, only how much of it comes and which tools it calls. It saves none of it.
+- **Reads:** the environment variables `COLORFGBG`, to tell a light background, and, for `/viz doctor`, `TERM`, `COLORTERM` and `TERM_PROGRAM`; Claude Code's settings as `/config` lists them, every row, other plugins' among them, of which it keeps only `theme`; the session's context usage; the session's subagents, with their names, task descriptions, types and whether they're at work; whether its own pane is open; your prompt as you edit it, to play your keys; each tool call's input, to tell which call a permission request is for, held in memory only while the call runs; and of the response as it streams, only how much of it comes and which tools it calls. It saves none of it.
 - **Writes:** your `/viz` settings in the plugin's own store, and the same settings in its own state with whether it's playing and whether its pane is open.
 - **Sends:** nothing over the network. Its `/viz` replies stay in the transcript, as any command's output does, so the model reads them. `/viz doctor`'s reply names your terminal's `TERM`, `COLORTERM`, `TERM_PROGRAM` and `COLORFGBG`, and Claude Code's theme. Each value a reply echoes is cut to 64 printable ASCII characters.
 

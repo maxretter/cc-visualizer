@@ -19,7 +19,7 @@ declare module 'claude-code' {
       place: VizPlace
       /** True while the music plays (activity, or bars still falling); not the idle show. */
       isPlaying: boolean
-      /** True while the big pane is open; the band steps aside for it. */
+      /** True while the big pane is open and drawn, as Claude Code lists it; the band steps aside for it. */
       isPaneOpen: boolean
     }
   }
