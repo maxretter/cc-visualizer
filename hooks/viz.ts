@@ -5,8 +5,8 @@
 // reads the world, asks these, and does what they say.
 
 import type { VizMode, VizPlace, VizSize, VizTheme } from '../types'
-import { THEME_NAMES, toneOf } from './engine'
-import type { Tone } from './engine'
+import { THEME_NAMES, toneOf } from './engine/color'
+import type { Tone } from './engine/color'
 
 /** The terminal's background as the person set it: `auto` follows Claude Code's theme. */
 export type Ground = 'auto' | Tone

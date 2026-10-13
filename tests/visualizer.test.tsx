@@ -2,34 +2,21 @@ import type { ConfigRow, On, PromptEditInput, PromptEditResult, SessionUsage, To
 import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
-import {
-  BEAT,
-  Bars,
-  Board,
-  CHANNEL,
-  Ensemble,
-  FRAME_MS,
-  GRACE,
-  GROUND,
-  IDLE_DELAY,
-  SOURCES,
-  Spectrum,
-  Step,
-  channelsFit,
-  clockText,
-  encodeBase64,
-  idleText,
-  legible,
-  luminance,
-  mix,
-  placeOf,
-  shortName,
-  sourceOf,
-  swatches,
-  toneOf,
-  trail,
-} from '../hooks/engine'
-import type { Chunk, SourceId } from '../hooks/engine'
+import { Bars } from '../hooks/engine/bars'
+import { Board } from '../hooks/engine/board'
+import { encodeBase64 } from '../hooks/engine/cells'
+import { CHANNEL, channelsFit } from '../hooks/engine/channels'
+import { GROUND, legible, luminance, mix, toneOf } from '../hooks/engine/color'
+import { swatches } from '../hooks/engine/doctor'
+import { Ensemble } from '../hooks/engine/ensemble'
+import { FRAME_MS } from '../hooks/engine/math'
+import { clockText, idleText } from '../hooks/engine/names'
+import { SOURCES, placeOf, shortName, sourceOf } from '../hooks/engine/sources'
+import type { SourceId } from '../hooks/engine/sources'
+import { BEAT, GRACE, IDLE_DELAY, Spectrum } from '../hooks/engine/spectrum'
+import { Step } from '../hooks/engine/step'
+import type { Chunk } from '../hooks/engine/step'
+import { trail } from '../hooks/engine/trail'
 import { PANE_WAITS } from '../hooks/viz'
 
 /** The glyphs of Raster cells, row by row. */

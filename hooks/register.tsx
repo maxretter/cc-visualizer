@@ -6,8 +6,18 @@ import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register, Timer } from 'claude-code'
 
 import type { VizSize, VizTheme } from '../types'
-import { Board, DOCTOR_ROWS, Ensemble, FRAME_MS, Spectrum, Step, sourceOf, swatches, trail } from './engine'
-import type { Ask, Call, Layout, SourceId, Tone } from './engine'
+import type { Layout } from './engine/bars'
+import { Board } from './engine/board'
+import type { Tone } from './engine/color'
+import { DOCTOR_ROWS, swatches } from './engine/doctor'
+import { Ensemble } from './engine/ensemble'
+import { FRAME_MS } from './engine/math'
+import { sourceOf } from './engine/sources'
+import type { SourceId } from './engine/sources'
+import { Spectrum } from './engine/spectrum'
+import type { Ask, Call } from './engine/spectrum'
+import { Step } from './engine/step'
+import { trail } from './engine/trail'
 import {
   DEFAULTS,
   DOCTOR_HINTS,
