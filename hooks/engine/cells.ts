@@ -42,11 +42,42 @@ export function blank(cells: number): Uint32Array {
   return words
 }
 
-/** Writes ASCII text into one row of cells. */
-export function write(words: Uint32Array, columns: number, row: number, start: number, text: string, color: number) {
-  for (let k = 0; k < text.length; k++) {
-    const i = (row * columns + start + k) * 3
-    words[i] = text.charCodeAt(k)
+/**
+ * Where a drawing draws: `words`, cells in rows `columns` wide, the drawing
+ * put at column `left` and cut off at column `right`, the columns from there
+ * on another's or past the edge.
+ */
+export type Canvas = { words: Uint32Array; columns: number; left: number; right: number }
+
+/** A blank canvas of its own, `columns` by `rows`. */
+export const canvas = (columns: number, rows: number): Canvas => ({ words: blank(columns * rows), columns, left: 0, right: columns })
+
+/**
+ * Whether Raster draws a code point in one cell: printable ASCII, as the names
+ * are kept to; the rest of Latin-1 but its soft hyphen (a `×`, a `·`); and the
+ * box drawing, blocks and braille the bars are made of. Claude Code refuses a
+ * whole drawing over any other (a control, combining or wide character).
+ */
+const isNarrow = (code: number): boolean =>
+  (code >= 0x20 && code <= 0x7e) ||
+  (code >= 0xa1 && code <= 0xff && code !== 0xad) ||
+  (code >= 0x2500 && code <= 0x259f) ||
+  (code >= 0x2800 && code <= 0x28ff)
+
+const UNKNOWN = 0x3f
+
+/**
+ * Writes text into one row of cells, as far as column `end` (the row's end, by
+ * default): each character Raster draws in one cell as itself, any other as a
+ * `?`, as the names are sanitized; what falls outside the row is left out.
+ */
+export function write(words: Uint32Array, columns: number, row: number, start: number, text: string, color: number, end = columns) {
+  if (row < 0 || (row + 1) * columns * 3 > words.length) return
+  const last = Math.min(end, columns, start + text.length)
+  for (let c = Math.max(0, start); c < last; c++) {
+    const code = text.charCodeAt(c - start)
+    const i = (row * columns + c) * 3
+    words[i] = isNarrow(code) ? code : UNKNOWN
     words[i + 1] = color
     words[i + 2] = DEFAULT
   }

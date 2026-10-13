@@ -40,6 +40,32 @@ describe('typing', () => {
     expect(spectrum.isCalm()).toBe(true)
   })
 
+  test('a long paste plays 32 of its characters, spread over it as they are, a pair of surrogates one', () => {
+    const paste = Array.from({ length: 100_000 }, (_, i) => (i % 7 === 3 ? '\u{1F600}' : String.fromCharCode(33 + (i % 90)))).join('')
+    for (const text of [paste, paste.replace(/\u{1F600}/gu, 'é'), 'a\u{1F600}B']) {
+      for (const isErased of [false, true]) {
+        // The run as the text spread out into its characters plays it: the one
+        // each note takes, put where a run as long as itself plays it.
+        const chars = [...text]
+        const count = Math.min(chars.length, 32)
+        const run: string[] = []
+        for (let n = 0; n < count; n++) {
+          const i = Math.floor((n * chars.length) / count)
+          run[isErased ? count - 1 - n : n] = chars[isErased ? chars.length - 1 - i : i]!
+        }
+        const played = new Spectrum()
+        played.typed(text, isErased)
+        const expected = new Spectrum()
+        expected.typed(run.join(''), isErased)
+        for (let t = 0; t < 1000; t += FRAME_MS) {
+          played.step()
+          expected.step()
+          for (let x = 0; x <= 1; x += 0.01) expect(played.at(x)).toBe(expected.at(x))
+        }
+      }
+    }
+  })
+
   test('typing holds off the idle show, which waits for a quiet spell to come back', () => {
     const spectrum = new Spectrum()
     spectrum.ambient = true

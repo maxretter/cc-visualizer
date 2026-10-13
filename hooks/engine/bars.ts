@@ -7,7 +7,8 @@ import { bump, fade, noise, random } from './math'
 import { SOURCES } from './sources'
 import { AMBER_AT, CUE, ERROR, GROUND, instrumentColor, LEGEND_GRAY, legible, mix, paletteOf, RED_AT, THEMES } from './color'
 import type { Tone } from './color'
-import { base64, blank, FULL, SPACE, write } from './cells'
+import { base64, canvas, FULL, SPACE, write } from './cells'
+import type { Canvas } from './cells'
 import { SPIKE } from './spectrum'
 import type { Spectrum } from './spectrum'
 import { callName, contextName, fit, nameColor, nameColorOf, statusName, thinkingName } from './names'
@@ -79,6 +80,9 @@ export class Bars {
    * bar and row, each bar's peak cap and floor, and the amber and red they turn.
    */
   private colors?: { theme: VizTheme; tone: Tone; bar: Uint32Array; peak: Uint32Array; floor: Uint32Array; cue: number; error: number }
+  /** The brainwave's workings, kept from frame to frame: its dots by cell, and its wave by column of dots. */
+  private masks?: Uint8Array
+  private waves?: Float64Array
 
   constructor(
     readonly columns: number,
@@ -107,12 +111,16 @@ export class Bars {
   }
 
   /**
-   * These bars `columns` wide, laid out as they are or as `layout` says, and
-   * standing as they stand: each bar takes the height, peak and shimmer of the
-   * bar nearest its place on the spectrum, so a drawing that narrows or widens moves on smoothly.
+   * These bars `columns` wide and `rows` high, laid out as they are or as
+   * `layout` says, and standing as they stand: each bar takes the height, peak
+   * and shimmer of the bar nearest its place on the spectrum, so a drawing that
+   * narrows or widens moves on smoothly. As many bars, as high, keep the
+   * colors worked out for them.
    */
-  resize(columns: number, layout: Layout = this.layout): Bars {
-    const bars = new Bars(columns, this.rows, layout)
+  resize(columns: number, layout: Layout = this.layout, rows = this.rows): Bars {
+    const bars = new Bars(columns, rows, layout)
+    // A bar's color is its place among them, so the same number of bars has the same colors.
+    if (bars.count === this.count && bars.rows === this.rows) bars.colors = this.colors
     for (let b = 0; b < bars.count; b++) {
       const from = Math.min(this.count - 1, Math.floor(((b + 0.5) / bars.count) * this.count))
       bars.height[b] = this.height[from]!
@@ -193,16 +201,21 @@ export class Bars {
 
   /** The bars as Raster cells, for a background of `tone`; with `labels`, each tool's name over its band. */
   paint(theme: VizTheme, spectrum?: Spectrum, labels = false, tone: Tone = 'dark'): string {
-    return base64(new Uint8Array(this.draw(theme, spectrum, labels, tone).buffer))
+    const into = canvas(this.columns, this.rows)
+    this.draw(into, theme, spectrum, labels, tone)
+    return base64(new Uint8Array(into.words.buffer))
   }
 
   /**
-   * The cells `paint` packs, three words each: glyph, foreground, background.
-   * With a `look`, the meter shows another spectrum's context, and names lead the labels.
+   * Draws the cells `paint` packs (three words each: glyph, foreground,
+   * background) into a canvas whose cells are blank where they go. With a
+   * `look`, the meter shows another spectrum's context, and names lead the labels.
    */
-  draw(theme: VizTheme, spectrum?: Spectrum, labels = false, tone: Tone = 'dark', look: Look = {}): Uint32Array {
-    const { columns, rows } = this
-    const words = blank(columns * rows)
+  draw(into: Canvas, theme: VizTheme, spectrum?: Spectrum, labels = false, tone: Tone = 'dark', look: Look = {}) {
+    const { rows } = this
+    const { words, columns, left: x0 } = into
+    // How many of the bars' columns show, from their left.
+    const shows = Math.min(this.columns, into.right - x0)
     const colors = this.colorsOf(theme, tone)
     const red = (spectrum?.flash ?? 0) * 0.65
     const amber = (spectrum?.cue ?? 0) * 0.8
@@ -231,26 +244,26 @@ export class Bars {
           continue
         }
         const top = rows - 1 - r
-        for (let c = 0; c < this.width && left + c < columns; c++) {
-          const i = (top * columns + left + c) * 3
+        for (let c = 0; c < this.width && left + c < shows; c++) {
+          const i = (top * columns + x0 + left + c) * 3
           words[i] = glyph
           words[i + 1] = color
         }
       }
     }
-    if (this.meter && spectrum !== undefined) this.paintMeter(words, look.meter ?? spectrum, tone)
-    if (spectrum !== undefined && spectrum.mind > 0) this.brainwave(words, theme, spectrum, tone)
-    if (labels && spectrum !== undefined) this.label(words, theme, spectrum, tone, look)
-    return words
+    if (this.meter && spectrum !== undefined) this.paintMeter(into, shows, look.meter ?? spectrum, tone)
+    if (spectrum !== undefined && spectrum.mind > 0) this.brainwave(into, shows, theme, spectrum, tone)
+    if (labels && spectrum !== undefined) this.label(into, shows, theme, spectrum, tone, look)
   }
 
   /**
    * The context meter at the right edge: it fills toward auto-compact at the
    * top, green, then amber, then red, its empty cells a dim track; now and
-   * then a glint runs up it.
+   * then a glint runs up it. As much of it as `shows`.
    */
-  private paintMeter(words: Uint32Array, spectrum: Spectrum, tone: Tone) {
-    const { columns, rows } = this
+  private paintMeter(into: Canvas, shows: number, spectrum: Spectrum, tone: Tone) {
+    const { rows } = this
+    const { words, columns, left: x0 } = into
     const level = spectrum.gauge * rows
     const track = mix(GROUND[tone], LEGEND_GRAY, 0.22)
     const glint = spectrum.glint()
@@ -260,6 +273,8 @@ export class Bars {
       const color = legible(METER[top >= RED_AT ? 2 : top >= AMBER_AT ? 1 : 0]!, tone)
       const glyph = fill >= 1 ? FULL : fill > 0 ? EIGHTHS[Math.max(1, Math.round(fill * 8))]! : SHADE
       for (let c = 0; c < this.width; c++) {
+        const x = this.columns - this.width + c
+        if (x >= shows) break
         let shine = 0
         if (glint !== undefined && fill > 0) {
           // A sheen runs up the filled part, from under its foot to over its
@@ -267,7 +282,7 @@ export class Bars {
           const at = -0.5 + glint * (level + 1) + 0.3 * (this.width - 1 - c)
           shine = 0.75 * bump(r + 0.5 - at, 0.45)
         }
-        const i = ((rows - 1 - r) * columns + columns - this.width + c) * 3
+        const i = ((rows - 1 - r) * columns + x0 + x) * 3
         words[i] = glyph
         words[i + 1] = fill > 0 ? mix(color, 0xffffff, shine) : track
       }
@@ -279,20 +294,23 @@ export class Bars {
    * above the bars, never the same twice, busier as thinking text streams in,
    * each spark of thought a spike running along it, and a glow drifting on it.
    */
-  private brainwave(words: Uint32Array, theme: VizTheme, spectrum: Spectrum, tone: Tone) {
+  private brainwave(into: Canvas, shows: number, theme: VizTheme, spectrum: Spectrum, tone: Tone) {
     const { columns, rows } = this
+    const { words, columns: stride, left: x0 } = into
     const { mind, restless, now, sparks } = spectrum
     const t = now / 1000
     const dotColumns = this.span * 2
     // Above the floor row, so it never threads between the bars' feet.
     const dotRows = Math.max(1, rows - 1) * 4
-    const masks = new Uint8Array(columns * rows)
+    this.masks ??= new Uint8Array(columns * rows)
+    const masks = this.masks.fill(0)
     const middle = (dotRows - 1) * 0.5
     const reach = dotRows * 0.4 * (0.35 + 0.65 * mind)
     // Noise rolling along the wave while its shape turns, a finer ripple on it
     // as the thinking gets restless; centered on its own mean, as the noise
     // can lean one way for seconds.
-    const waves = new Float64Array(dotColumns)
+    this.waves ??= new Float64Array(dotColumns)
+    const waves = this.waves
     let sum = 0
     for (let x = 0; x < dotColumns; x++) {
       const u = x / dotColumns
@@ -321,9 +339,11 @@ export class Bars {
     }
     const base = legible(theme === 'instrument' ? MIND : THEMES[theme].bar(0.8, 0), tone)
     for (let cell = 0; cell < masks.length; cell++) {
-      const i = cell * 3
-      if (masks[cell] === 0 || words[i] !== SPACE) continue
-      const pulse = 0.75 + 0.25 * noise(((cell % columns) / this.span) * 5 - t * 1.8, 7 + t * 0.4)
+      const x = cell % columns
+      if (masks[cell] === 0 || x >= shows) continue
+      const i = (Math.floor(cell / columns) * stride + x0 + x) * 3
+      if (words[i] !== SPACE) continue
+      const pulse = 0.75 + 0.25 * noise((x / this.span) * 5 - t * 1.8, 7 + t * 0.4)
       words[i] = BRAILLE + masks[cell]!
       words[i + 1] = mix(GROUND[tone], base, (0.3 + 0.7 * mind) * pulse)
     }
@@ -334,25 +354,26 @@ export class Bars {
    * compaction, the idle), the context's fill at the right by the meter, and
    * the newest call of each tool band, its name over the band, between.
    */
-  private label(words: Uint32Array, theme: VizTheme, spectrum: Spectrum, tone: Tone, look: Look) {
+  private label(into: Canvas, shows: number, theme: VizTheme, spectrum: Spectrum, tone: Tone, look: Look) {
+    const put = (start: number, text: string, color: number) => write(into.words, into.columns, 0, into.left + start, text, color, into.left + shows)
     let free = 0
     let end = this.span
     const context = this.meter ? contextName(look.meter ?? spectrum) : undefined
     if (context !== undefined && context.text.length < this.span) {
-      write(words, this.columns, 0, end - context.text.length, context.text, nameColorOf(theme, context, context.strength, tone))
+      put(end - context.text.length, context.text, nameColorOf(theme, context, context.strength, tone))
       end -= context.text.length + 1
     }
     let at = this.offset
     for (const lead of look.lead ?? []) {
       const text = fit(lead.text, Math.max(8, Math.floor((end - this.offset) / 3)))
       if (at + text.length > end) break
-      write(words, this.columns, 0, at, text, nameColorOf(theme, lead, lead.strength, tone))
+      put(at, text, nameColorOf(theme, lead, lead.strength, tone))
       at += text.length + 1
       free = at
     }
     const status = statusName(spectrum)
     if (status !== undefined && at + status.text.length <= end) {
-      write(words, this.columns, 0, at, status.text, nameColorOf(theme, status, status.strength, tone))
+      put(at, status.text, nameColorOf(theme, status, status.strength, tone))
       free = at + status.text.length + 1
     }
     for (const source of SOURCES) {
@@ -365,29 +386,31 @@ export class Bars {
       const { text } = name
       const start = Math.max(free, Math.min(end - text.length, this.columnAt(source.at) - Math.floor(text.length / 2)))
       if (start < 0 || start + text.length > end) continue
-      write(words, this.columns, 0, start, text, nameColor(theme, source.id, name.strength, tone))
+      put(start, text, nameColor(theme, source.id, name.strength, tone))
       free = start + text.length + 1
     }
   }
 
   /** One row naming the instruments under their place on the spectrum. */
   legend(theme: VizTheme, tone: Tone = 'dark'): string {
-    return base64(new Uint8Array(this.legendCells(theme, tone).buffer))
+    const into = canvas(this.columns, 1)
+    this.drawLegend(into, theme, tone)
+    return base64(new Uint8Array(into.words.buffer))
   }
 
-  /** The cells `legend` packs. */
-  legendCells(theme: VizTheme, tone: Tone = 'dark'): Uint32Array {
-    const words = blank(this.columns)
+  /** Draws the cells `legend` packs into the top row of a canvas whose cells are blank where they go. */
+  drawLegend(into: Canvas, theme: VizTheme, tone: Tone = 'dark') {
+    const shows = Math.min(this.columns, into.right - into.left)
     let free = 0
     for (const s of SOURCES) {
       const start = Math.max(free, Math.min(this.span - s.label.length, this.columnAt(s.at) - Math.floor(s.label.length / 2)))
       if (start < 0 || start + s.label.length > this.span) continue
-      for (let k = 0; k < s.label.length; k++) {
-        words[(start + k) * 3] = s.label.charCodeAt(k)
-        words[(start + k) * 3 + 1] = legible(theme === 'instrument' ? s.color : LEGEND_GRAY, tone)
+      for (let k = 0; k < s.label.length && start + k < shows; k++) {
+        const i = (into.left + start + k) * 3
+        into.words[i] = s.label.charCodeAt(k)
+        into.words[i + 1] = legible(theme === 'instrument' ? s.color : LEGEND_GRAY, tone)
       }
       free = start + s.label.length + 1
     }
-    return words
   }
 }

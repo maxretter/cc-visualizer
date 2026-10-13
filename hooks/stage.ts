@@ -94,13 +94,14 @@ export class Stage {
     if (isShown) this.wake()
   }
 
-  // A drawing of the same key and size keeps its bars where they stood. One
-  // drawn again while a dialog covers it is still held: the dialog may show it
-  // as it was, so the frames go on trying until one lands.
+  // A drawing of the same key and size keeps its bars where they stood; one
+  // resized plays on as it stood, laid out anew. One drawn again while a
+  // dialog covers it is still held: the dialog may show it as it was, so the
+  // frames go on trying until one lands.
   mount(requestId: string, key: string, columns: number, rows: number, extra: Mount = {}): Site {
     const had = this.sites.get(requestId)
     const isSame = had?.key === key && had.board.columns === columns && had.board.rows === rows
-    const board = isSame ? had.board : new Board(columns, rows, extra.layout)
+    const board = isSame ? had.board : had?.key === key ? had.board.resize(columns, rows, extra.layout) : new Board(columns, rows, extra.layout)
     const site = {
       requestId,
       key,

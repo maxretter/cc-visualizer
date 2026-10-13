@@ -9,6 +9,7 @@ import { Ensemble } from '../hooks/engine/ensemble'
 import { FRAME_MS } from '../hooks/engine/math'
 import { Spectrum } from '../hooks/engine/spectrum'
 import { trail } from '../hooks/engine/trail'
+import { Stage } from '../hooks/stage'
 import { band, colors, redness, staged, text } from './support'
 
 describe('subagents', () => {
@@ -395,6 +396,56 @@ describe('subagents', () => {
     spectrum.endCall(spectrum.startCall('Edit'))
     const [, bottom] = text(trail(spectrum, 'instrument', 60, 2, 'dark', ensemble, scout), 60)
     expect(bottom).toMatch(/audit · main Edit · [⠁-⣿] scout Grep {2}$/)
+  })
+
+  test('a board paints into the same cells each frame, nothing of the last left behind', () => {
+    const { spectrum, ensemble, step, paint, view } = staging()
+    const scout = ensemble.join('a1', { name: 'scout' })
+    ensemble.join('a2', { name: 'audit' })
+    spectrum.beginThinking()
+    scout.spectrum.startCall('Grep')
+    spectrum.startCall('Edit')
+    // Through the channels opening, one growing in view and shrinking back, all of it moving.
+    for (let t = 0; t < 2_000; t += FRAME_MS) {
+      if (t === 330) view('a1')
+      if (t === 990) view(undefined)
+      step()
+      expect(paint()).toBe(paint())
+    }
+    // All of it done and fallen: the cells a board fresh to the same stage paints.
+    spectrum.endThinking()
+    scout.spectrum.endCall(scout.spectrum.calls[0]!)
+    spectrum.endCall(spectrum.calls[0]!)
+    for (let t = 0; t < 6_000; t += 100) step(100)
+    const fresh = new Board(80, 4, { width: 2, gap: 1, meter: true })
+    fresh.step(spectrum, ensemble)
+    expect(paint()).toBe(fresh.paint('instrument', spectrum, ensemble, true, 'dark'))
+    expect(text(paint(), 80)[0]).toMatch(/scout\s+audit/)
+  })
+
+  test('a drawing resized plays on as it stood: its bars at their heights, its channels as open as they were', () => {
+    const stage = new Stage('viz')
+    const layout = { width: 2, gap: 1, meter: true }
+    const site = stage.mount('band', 'band', 80, 4, { layout, labels: true })
+    const scout = stage.ensemble.join('a1', { name: 'scout' })
+    stage.ensemble.join('a2', { name: 'audit' })
+    scout.spectrum.startCall('Grep')
+    stage.spectrum.startCall('Bash')
+    for (let t = 0; t < 600; t += FRAME_MS) stage.frame(FRAME_MS, () => {})
+    const standing = raised(text(site.board.bars.paint('instrument', stage.spectrum), site.board.bars.columns))
+    expect(standing).toBeGreaterThan(0)
+
+    for (const [columns, rows] of [[100, 4], [64, 4], [64, 6]] as const) {
+      const { board } = stage.mount('band', 'band', columns, rows, { layout, labels: true })
+      expect(board.columns).toBe(columns)
+      // Before a frame: standing, not risen again from the floor.
+      expect(board.isSettled()).toBe(false)
+      expect(raised(text(board.bars.paint('instrument', stage.spectrum), columns))).toBeGreaterThan(0.5 * standing)
+      // Open at once where they fit, the one that no longer does waiting for room.
+      expect(board.channels.has(scout)).toBe(true)
+      stage.frame(FRAME_MS, () => {})
+      expect(text(board.paint('instrument', stage.spectrum, stage.ensemble, true), columns)[0]).toMatch(columns > 80 ? /scout.*audit/ : /scout.*\+1$/)
+    }
   })
 })
 

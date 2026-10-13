@@ -4,7 +4,7 @@
 import type { VizTheme } from '../../types'
 import { GROUND, LEGEND_GRAY, legible, mix } from './color'
 import type { Tone } from './color'
-import { blank, SPACE, write } from './cells'
+import { SPACE, write } from './cells'
 import type { Ensemble, Voice } from './ensemble'
 import { focusLead, voiceLabel } from './names'
 import { Bars } from './bars'
@@ -145,25 +145,23 @@ export class Channels {
       const shows = Math.min(this.widthOf(seat), columns - at)
       const alpha = seat.shown
       if (alpha > 0 && shows > 0) {
-        // The whole channel, then as much of it as is open.
+        // Straight into the drawing's cells, blank here, after the gap: as much of the channel as is open.
         const width = seat.bars.columns
-        const full = width + CHANNEL_GAP
         const isWide = width >= WIDE
-        const channel = blank(full * rows)
-        const cells = seat.bars.draw(theme, seat.voice.spectrum, isWide, tone, isWide ? { lead: focusLead(seat.voice) } : {})
-        for (let r = 0; r < rows; r++) {
-          for (let c = 0; c < width; c++) {
-            const from = (r * width + c) * 3
-            const to = (r * full + CHANNEL_GAP + c) * 3
-            channel[to] = cells[from]!
-            channel[to + 1] = alpha < 1 && cells[from] !== SPACE ? mix(GROUND[tone], cells[from + 1]!, alpha) : cells[from + 1]!
+        const into = { words, columns, left: at + CHANNEL_GAP, right: at + shows }
+        seat.bars.draw(into, theme, seat.voice.spectrum, isWide, tone, isWide ? { lead: focusLead(seat.voice) } : {})
+        if (alpha < 1) {
+          for (let r = 0; r < rows; r++) {
+            for (let c = into.left; c < into.right; c++) {
+              const cell = (r * columns + c) * 3
+              if (words[cell] !== SPACE) words[cell + 1] = mix(GROUND[tone], words[cell + 1]!, alpha)
+            }
           }
         }
         if (!isWide) {
           const room = i === this.seats.length - 1 && more !== '' ? width - more.length - 1 : width
-          voiceLabel(channel, full, CHANNEL_GAP, room, seat.voice, alpha, theme, tone)
+          voiceLabel(words, columns, into.left, room, seat.voice, alpha, theme, tone, into.right)
         }
-        for (let r = 0; r < rows; r++) words.set(channel.subarray(r * full * 3, (r * full + shows) * 3), (r * columns + at) * 3)
       }
       at += shows
     })
@@ -176,9 +174,27 @@ export class Channels {
     for (const seat of this.seats) {
       const shows = Math.min(this.widthOf(seat), columns - at)
       if (seat.bars.columns >= WIDE && shows > CHANNEL_GAP) {
-        words.set(seat.bars.legendCells(theme, tone).subarray(0, (shows - CHANNEL_GAP) * 3), (at + CHANNEL_GAP) * 3)
+        seat.bars.drawLegend({ words, columns, left: at + CHANNEL_GAP, right: at + shows }, theme, tone)
       }
       at += shows
     }
+  }
+
+  /**
+   * These channels for a drawing resized: up to `capacity` of them and `rows`
+   * high, each as far open, faded in and grown as it was, its bars standing as
+   * they stood. Those closing close on; of the rest, those past the capacity
+   * wait for room again.
+   */
+  resize(capacity: number, rows: number): Channels {
+    const channels = new Channels(capacity, rows)
+    let staying = 0
+    for (const seat of this.seats) {
+      if (!seat.isLeaving && staying++ >= capacity) continue
+      const { columns } = seat.bars
+      channels.seats.push({ ...seat, bars: rows === seat.bars.rows ? seat.bars : seat.bars.resize(columns, channelLayout(columns), rows) })
+    }
+    channels.isFresh = this.isFresh
+    return channels
   }
 }

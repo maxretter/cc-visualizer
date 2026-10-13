@@ -34,6 +34,21 @@ describe('light terminals', () => {
     expect(toneOf('auto')).toBe('dark')
   })
 
+  test("COLORFGBG's background is its last field set, read when it is one of the 16 colors; anything else is no reading", () => {
+    // 7 and 9 to 15 are light, the rest dark.
+    expect(toneOf('auto', '0;7')).toBe('light')
+    expect(toneOf('auto', '15;8')).toBe('dark')
+    expect(toneOf('auto', '0;12')).toBe('light')
+    // A field left empty at the end is not the background.
+    expect(toneOf('auto', '0;15;')).toBe('light')
+    // A color of 256, a default, or a number written otherwise: no reading, so dark.
+    expect(toneOf('auto', '15;234')).toBe('dark')
+    expect(toneOf('auto', '0;255')).toBe('dark')
+    expect(toneOf('auto', '15;default')).toBe('dark')
+    expect(toneOf('auto', '0x0f')).toBe('dark')
+    expect(toneOf('auto', '')).toBe('dark')
+  })
+
   test('on a light background every color stands out, and the bars fade to white at their feet', () => {
     for (const color of SOURCES.map(source => source.color)) {
       expect(legible(color, 'dark')).toBe(color)
