@@ -35,7 +35,7 @@ const MAIN_LEAST = CHANNEL
 export class Board {
   /** The main spectrum's bars, as wide as the channels leave them. */
   bars: Bars
-  readonly channels: Channels
+  channels: Channels
   private readonly layout: Layout
   /** The cells each frame paints, and the blank they start from; the same for the legend's row. */
   private readonly cells: Canvas
@@ -55,6 +55,18 @@ export class Board {
     this.cells = { words: this.blank.slice(), columns, left: 0, right: columns }
     this.blankRow = blank(columns)
     this.legendRow = { words: this.blankRow.slice(), columns, left: 0, right: columns }
+  }
+
+  /**
+   * This board `columns` wide and `rows` high, laid out as `layout` says,
+   * playing on as it stands: its bars at their heights, its channels as far
+   * open and grown as they are, those that no longer fit waiting for room.
+   */
+  resize(columns: number, rows: number, layout?: Layout): Board {
+    const board = new Board(columns, rows, layout)
+    board.bars = this.bars.resize(columns, board.layout, rows)
+    board.channels = this.channels.resize(board.channels.capacity, rows)
+    return board
   }
 
   /** The subagent in focus when it has no channel here to grow into: it plays on the main bars. */

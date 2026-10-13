@@ -175,4 +175,22 @@ export class Channels {
       at += shows
     }
   }
+
+  /**
+   * These channels for a drawing resized: up to `capacity` of them and `rows`
+   * high, each as far open, faded in and grown as it was, its bars standing as
+   * they stood. Those closing close on; of the rest, those past the capacity
+   * wait for room again.
+   */
+  resize(capacity: number, rows: number): Channels {
+    const channels = new Channels(capacity, rows)
+    let staying = 0
+    for (const seat of this.seats) {
+      if (!seat.isLeaving && staying++ >= capacity) continue
+      const { columns } = seat.bars
+      channels.seats.push({ ...seat, bars: rows === seat.bars.rows ? seat.bars : seat.bars.resize(columns, channelLayout(columns), rows) })
+    }
+    channels.isFresh = this.isFresh
+    return channels
+  }
 }

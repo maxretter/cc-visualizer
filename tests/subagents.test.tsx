@@ -9,6 +9,7 @@ import { Ensemble } from '../hooks/engine/ensemble'
 import { FRAME_MS } from '../hooks/engine/math'
 import { Spectrum } from '../hooks/engine/spectrum'
 import { trail } from '../hooks/engine/trail'
+import { Stage } from '../hooks/stage'
 import { band, colors, staged, text } from './support'
 
 describe('subagents', () => {
@@ -358,6 +359,31 @@ describe('subagents', () => {
     fresh.step(spectrum, ensemble)
     expect(paint()).toBe(fresh.paint('instrument', spectrum, ensemble, true, 'dark'))
     expect(text(paint(), 80)[0]).toMatch(/scout\s+audit/)
+  })
+
+  test('a drawing resized plays on as it stood: its bars at their heights, its channels as open as they were', () => {
+    const stage = new Stage('viz')
+    const layout = { width: 2, gap: 1, meter: true }
+    const site = stage.mount('band', 'band', 80, 4, { layout, labels: true })
+    const scout = stage.ensemble.join('a1', { name: 'scout' })
+    stage.ensemble.join('a2', { name: 'audit' })
+    scout.spectrum.startCall('Grep')
+    stage.spectrum.startCall('Bash')
+    for (let t = 0; t < 600; t += FRAME_MS) stage.frame(FRAME_MS, () => {})
+    const standing = raised(text(site.board.bars.paint('instrument', stage.spectrum), site.board.bars.columns))
+    expect(standing).toBeGreaterThan(0)
+
+    for (const [columns, rows] of [[100, 4], [64, 4], [64, 6]] as const) {
+      const { board } = stage.mount('band', 'band', columns, rows, { layout, labels: true })
+      expect(board.columns).toBe(columns)
+      // Before a frame: standing, not risen again from the floor.
+      expect(board.isSettled()).toBe(false)
+      expect(raised(text(board.bars.paint('instrument', stage.spectrum), columns))).toBeGreaterThan(0.5 * standing)
+      // Open at once where they fit, the one that no longer does waiting for room.
+      expect(board.channels.has(scout)).toBe(true)
+      stage.frame(FRAME_MS, () => {})
+      expect(text(board.paint('instrument', stage.spectrum, stage.ensemble, true), columns)[0]).toMatch(columns > 80 ? /scout.*audit/ : /scout.*\+1$/)
+    }
   })
 })
 

@@ -111,15 +111,16 @@ export class Bars {
   }
 
   /**
-   * These bars `columns` wide, laid out as they are or as `layout` says, and
-   * standing as they stand: each bar takes the height, peak and shimmer of the
-   * bar nearest its place on the spectrum, so a drawing that narrows or widens
-   * moves on smoothly. As many bars keep the colors worked out for them.
+   * These bars `columns` wide and `rows` high, laid out as they are or as
+   * `layout` says, and standing as they stand: each bar takes the height, peak
+   * and shimmer of the bar nearest its place on the spectrum, so a drawing that
+   * narrows or widens moves on smoothly. As many bars, as high, keep the
+   * colors worked out for them.
    */
-  resize(columns: number, layout: Layout = this.layout): Bars {
-    const bars = new Bars(columns, this.rows, layout)
+  resize(columns: number, layout: Layout = this.layout, rows = this.rows): Bars {
+    const bars = new Bars(columns, rows, layout)
     // A bar's color is its place among them, so the same number of bars has the same colors.
-    if (bars.count === this.count) bars.colors = this.colors
+    if (bars.count === this.count && bars.rows === this.rows) bars.colors = this.colors
     for (let b = 0; b < bars.count; b++) {
       const from = Math.min(this.count - 1, Math.floor(((b + 0.5) / bars.count) * this.count))
       bars.height[b] = this.height[from]!
