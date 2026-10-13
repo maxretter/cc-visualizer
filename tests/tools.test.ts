@@ -4,7 +4,7 @@ import { Bars } from '../hooks/engine/bars'
 import { shortName } from '../hooks/engine/sources'
 import { Spectrum } from '../hooks/engine/spectrum'
 import { trail } from '../hooks/engine/trail'
-import { ink, text } from './support'
+import { ink, painted, text } from './support'
 
 describe('tool names', () => {
   test('MCP tools drop their server', () => {
@@ -43,9 +43,9 @@ describe('tool names', () => {
     spectrum.startCall('Edit')
     spectrum.step()
     bars.step(spectrum)
-    const [top] = text(bars.paint(ink, spectrum, true), 80)
+    const [top] = text(painted(bars, ink, spectrum, true), 80)
     expect(top).toContain('Edit')
-    const [unlabelled] = text(bars.paint(ink, spectrum), 80)
+    const [unlabelled] = text(painted(bars, ink, spectrum), 80)
     expect(unlabelled).not.toContain('Edit')
   })
 })

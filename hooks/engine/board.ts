@@ -2,7 +2,7 @@
 // subagents' channels, as many as fit.
 
 import type { Ink } from './color'
-import { blank, pack } from './cells'
+import { blank, canvas, pack } from './cells'
 import type { Canvas } from './cells'
 import type { Spectrum } from './spectrum'
 import { mainVoice } from './ensemble'
@@ -50,10 +50,10 @@ export class Board {
     this.layout = layout ?? { width: columns >= WIDE ? 2 : 1, gap: 1 }
     this.bars = new Bars(columns, rows, this.layout)
     this.channels = new Channels(channelsFit(columns), rows)
+    this.cells = canvas(columns, rows)
     this.blank = blank(columns * rows)
-    this.cells = { words: this.blank.slice(), columns, left: 0, right: columns }
+    this.legendRow = canvas(columns, 1)
     this.blankRow = blank(columns)
-    this.legendRow = { words: this.blankRow.slice(), columns, left: 0, right: columns }
   }
 
   /**

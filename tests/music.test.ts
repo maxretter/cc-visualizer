@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { Bars } from '../hooks/engine/bars'
-import { base64, blank, encodeBase64, write } from '../hooks/engine/cells'
+import { base64, blank, canvas, encodeBase64, pack, write } from '../hooks/engine/cells'
 import { inkOf } from '../hooks/engine/color'
 import { FRAME_MS } from '../hooks/engine/math'
 import { clockText } from '../hooks/engine/names'
@@ -12,7 +12,7 @@ import type { Call } from '../hooks/engine/spectrum'
 import { Step } from '../hooks/engine/step'
 import type { Chunk } from '../hooks/engine/step'
 import { trail } from '../hooks/engine/trail'
-import { ink, redness, staged, text, thirds } from './support'
+import { ink, painted, redness, staged, text, thirds } from './support'
 
 describe('engine', () => {
   test('tools land on their instruments', () => {
@@ -58,8 +58,10 @@ describe('engine', () => {
     }
     for (const theme of ['instrument', 'claude', 'synthwave', 'classic'] as const) {
       // 12 bytes a cell, base64 is 4 characters per 3 bytes.
-      expect(bars.paint(inkOf(theme, 'dark'), spectrum, true).length).toBe((37 * 5 * 12 * 4) / 3)
-      expect(bars.legend(inkOf(theme, 'dark')).length).toBe((37 * 12 * 4) / 3)
+      expect(painted(bars, inkOf(theme, 'dark'), spectrum, true).length).toBe((37 * 5 * 12 * 4) / 3)
+      const legend = canvas(37, 1)
+      bars.drawLegend(legend, inkOf(theme, 'dark'))
+      expect(pack(legend.words).length).toBe((37 * 12 * 4) / 3)
     }
   })
 })

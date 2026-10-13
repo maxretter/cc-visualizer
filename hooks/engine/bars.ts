@@ -6,7 +6,7 @@ import { bump, fade, noise, random } from './math'
 import { SOURCES } from './sources'
 import { instrumentColor, LEGEND_GRAY, legible, meterColor, mix } from './color'
 import type { Ink } from './color'
-import { canvas, FULL, pack, SPACE, write } from './cells'
+import { FULL, SPACE, write } from './cells'
 import type { Canvas } from './cells'
 import { SPIKE } from './spectrum'
 import type { Spectrum } from './spectrum'
@@ -196,17 +196,10 @@ export class Bars {
     return colors
   }
 
-  /** The bars as Raster cells, in `ink`; with `labels`, each tool's name over its band. */
-  paint(ink: Ink, spectrum?: Spectrum, labels = false): string {
-    const into = canvas(this.columns, this.rows)
-    this.draw(into, ink, spectrum, labels)
-    return pack(into.words)
-  }
-
   /**
-   * Draws the cells `paint` packs (three words each: glyph, foreground,
-   * background) into a canvas whose cells are blank where they go. With a
-   * `look`, the meter shows another spectrum's context, and names lead the labels.
+   * Draws the bars over `spectrum` in `ink` into a canvas whose cells are
+   * blank where they go; with `labels`, each tool's name over its band. With
+   * a `look`, the meter shows another spectrum's context, and names lead the labels.
    */
   draw(into: Canvas, ink: Ink, spectrum?: Spectrum, labels = false, look: Look = {}) {
     const { rows } = this
@@ -387,14 +380,10 @@ export class Bars {
     }
   }
 
-  /** One row naming the instruments under their place on the spectrum, in `ink`. */
-  legend(ink: Ink): string {
-    const into = canvas(this.columns, 1)
-    this.drawLegend(into, ink)
-    return pack(into.words)
-  }
-
-  /** Draws the cells `legend` packs into the top row of a canvas whose cells are blank where they go. */
+  /**
+   * Draws the legend, one row naming the instruments under their place on the
+   * spectrum, in `ink`, into the top row of a canvas whose cells are blank where they go.
+   */
   drawLegend(into: Canvas, ink: Ink) {
     const shows = Math.min(this.columns, into.right - into.left)
     let free = 0

@@ -5,7 +5,7 @@ import { GROUND, inkOf, legible, luminance, toneOf } from '../hooks/engine/color
 import { swatches } from '../hooks/engine/doctor'
 import { SOURCES } from '../hooks/engine/sources'
 import { Spectrum } from '../hooks/engine/spectrum'
-import { band, colors, staged, text } from './support'
+import { band, colors, painted, staged, text } from './support'
 
 describe('light terminals', () => {
   /** The background colors of Raster cells, row by row, the terminal's default as `0x01000000`. */
@@ -62,8 +62,8 @@ describe('light terminals', () => {
       spectrum.step()
       bars.step(spectrum)
     }
-    const light = colors(bars.paint(inkOf('instrument', 'light'), spectrum), 80)
-    const dark = colors(bars.paint(inkOf('instrument', 'dark'), spectrum), 80)
+    const light = colors(painted(bars, inkOf('instrument', 'light'), spectrum), 80)
+    const dark = colors(painted(bars, inkOf('instrument', 'dark'), spectrum), 80)
     expect(brightness(light[3]!)).toBeGreaterThan(brightness(light[1]!))
     expect(brightness(dark[3]!)).toBeLessThan(brightness(dark[1]!))
   })

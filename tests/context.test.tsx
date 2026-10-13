@@ -4,7 +4,7 @@ import { Bars } from '../hooks/engine/bars'
 import { mix } from '../hooks/engine/color'
 import { FRAME_MS } from '../hooks/engine/math'
 import { Spectrum } from '../hooks/engine/spectrum'
-import { band, colors, ink, staged, text } from './support'
+import { band, colors, ink, painted, staged, text } from './support'
 
 describe('the context, through the plugin', () => {
   test('a measure fills the meter, measured again only when the window changes', async ($, on) => {
@@ -70,14 +70,14 @@ describe('context', () => {
     const bars = new Bars(80, 4, { width: 2, gap: 1, meter: true })
     expect(bars.span).toBe(76)
     // Unmeasured: an empty track, and no label.
-    expect(text(bars.paint(ink, spectrum, true), 80).map(row => row.slice(78))).toEqual(['\u2591\u2591', '\u2591\u2591', '\u2591\u2591', '\u2591\u2591'])
-    expect(text(bars.paint(ink, spectrum, true), 80)[0]).not.toContain('context')
+    expect(text(painted(bars, ink, spectrum, true), 80).map(row => row.slice(78))).toEqual(['\u2591\u2591', '\u2591\u2591', '\u2591\u2591', '\u2591\u2591'])
+    expect(text(painted(bars, ink, spectrum, true), 80)[0]).not.toContain('context')
 
     // Auto-compact at 80% of the window: 40% of it is halfway up the meter.
     spectrum.measure(40, 0.8)
     for (let i = 0; i < 60; i++) spectrum.step()
     expect(Math.abs(spectrum.gauge - 0.5)).toBeLessThan(0.005)
-    const rows = text(bars.paint(ink, spectrum, true), 80)
+    const rows = text(painted(bars, ink, spectrum, true), 80)
     expect(rows.map(row => row.slice(78))).toEqual(['\u2591\u2591', '\u2591\u2591', '\u2588\u2588', '\u2588\u2588'])
     expect(rows[0]?.trimEnd()).toMatch(/context 40%\s+\u2591\u2591$/)
   })
@@ -101,7 +101,7 @@ describe('context', () => {
   test('now and then a glint runs up the meter, and after each measure', () => {
     const spectrum = new Spectrum()
     const bars = new Bars(40, 4, { width: 2, gap: 1, meter: true })
-    const meter = () => colors(bars.paint(ink, spectrum), 40).map(row => row.slice(38))
+    const meter = () => colors(painted(bars, ink, spectrum), 40).map(row => row.slice(38))
     const brightest = (cells: number[][]) => Math.max(...cells.flat().map(c => ((c >> 16) & 255) + ((c >> 8) & 255) + (c & 255)))
     spectrum.measure(80, 1, true)
     for (let i = 0; i < 100; i++) spectrum.step()
@@ -136,7 +136,7 @@ describe('context', () => {
       bars.step(spectrum)
     }
     expect(spectrum.isResting()).toBe(false)
-    expect(text(bars.paint(ink, spectrum, true), 80)[0]).toMatch(/^\s*compacting/)
+    expect(text(painted(bars, ink, spectrum, true), 80)[0]).toMatch(/^\s*compacting/)
     spectrum.endRewind()
     for (let i = 0; i < 300; i++) spectrum.step()
     expect(spectrum.isQuiet()).toBe(true)

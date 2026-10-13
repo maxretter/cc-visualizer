@@ -5,7 +5,11 @@ import type { ConfigRow, On, PermissionRequestDecision, SessionUsage, ToolCallRe
 import { mock } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
+import type { Bars } from '../hooks/engine/bars'
+import { canvas, pack } from '../hooks/engine/cells'
 import { inkOf } from '../hooks/engine/color'
+import type { Ink } from '../hooks/engine/color'
+import type { Spectrum } from '../hooks/engine/spectrum'
 
 /** The glyphs of Raster cells, row by row. */
 export const text = (cells: string, columns: number): string[] => {
@@ -36,6 +40,13 @@ export const colors = (cells: string, columns: number): number[][] => {
 
 /** The ink the tests draw in where the colors are not the point: the instrument theme's, on a dark background. */
 export const ink = inkOf('instrument', 'dark')
+
+/** Bars as Raster cells of their own, drawn as a board draws them: in `ink`, over `spectrum`; with `labels`, each tool's name over its band. */
+export const painted = (bars: Bars, ink: Ink, spectrum?: Spectrum, labels = false): string => {
+  const into = canvas(bars.columns, bars.rows)
+  bars.draw(into, ink, spectrum, labels)
+  return pack(into.words)
+}
 
 export const band = (isWorking: boolean) => ({
   plugin: 'visualizer',
