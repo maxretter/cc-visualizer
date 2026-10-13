@@ -1,23 +1,20 @@
-// The hooks: what Claude Code tells the plugin, played on the engine's music,
-// and the drawings that show it. What to do is decided in viz.ts and the
-// music in engine.ts; this reads the world, asks them, and does what they say.
+// The hooks that reach the world through `$`: the session's start and the
+// frames it runs, the context window, Claude Code's settings, the drawings,
+// and /viz. The hooks that only play the music are in music.ts, and the
+// session they share is stage.ts's. What to do is decided in viz.ts and the
+// music in engine/; this reads the world, asks them, and does what they say.
 
 import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register, Timer } from 'claude-code'
 
 import type { VizSize, VizTheme } from '../types'
 import type { Layout } from './engine/bars'
-import { Board } from './engine/board'
-import type { Tone } from './engine/color'
 import { DOCTOR_ROWS, swatches } from './engine/doctor'
-import { Ensemble } from './engine/ensemble'
 import { FRAME_MS } from './engine/math'
-import { sourceOf } from './engine/sources'
-import type { SourceId } from './engine/sources'
-import { Spectrum } from './engine/spectrum'
-import type { Ask, Call } from './engine/spectrum'
-import { Step } from './engine/step'
 import { trail } from './engine/trail'
+import { music } from './music'
+import { Stage } from './stage'
+import type { Site } from './stage'
 import {
   DEFAULTS,
   DOCTOR_HINTS,
@@ -27,20 +24,14 @@ import {
   command,
   doctorReport,
   factsOf,
-  argumentsOf,
-  inputKey,
   isAmbient,
   isBandShown,
-  isKeyed,
   measuredFrom,
-  pace,
   percentOf,
   prefsFrom,
-  requestFor,
   savedOf,
-  toneFor,
 } from './viz'
-import type { Backdrop, Check, Measured, Prefs } from './viz'
+import type { Measured, Prefs } from './viz'
 
 const PANE = 'viz'
 const BAND_ROWS = 5
@@ -50,8 +41,6 @@ const MINI_ROWS = 2
 const MINI_LAYOUT: Layout = { width: 1, gap: 1, meter: true }
 /** The band's and the pane's bars, the context meter at the right edge. */
 const wide = (columns: number): Layout => ({ width: columns >= 30 ? 2 : 1, gap: 1, meter: true })
-/** Tools whose whole call waits on the person: a question, a plan to approve. */
-const PERSON = new Set(['AskUserQuestion', 'ExitPlanMode'])
 /** The most columns the tool names beside the mini spectrum take. */
 const MINI_NAMES = 56
 /** How long between tries at a drawing whose frames the engine refuses. */
@@ -68,29 +57,6 @@ const isPlaying = atom({ plugin: 'visualizer', key: 'isPlaying' } as const, fals
 const isPaneOpen = atom({ plugin: 'visualizer', key: 'isPaneOpen' } as const, false)
 
 const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, Math.floor(n)))
-
-/**
- * A drawing the frames repaint: its board (the bars, and the subagents'
- * channels where they fit), the raster of tool names beside a mini one, and
- * the legend under the pane's, which follows the bars as channels come and go.
- */
-type Site = {
-  requestId: string
-  key: string
-  board: Board
-  labels: boolean
-  names?: { key: string; columns: number; rows: number }
-  legend?: string
-  /** While the engine refuses its frames (a dialog took its place): when to try again, on the music's clock. */
-  retryAt?: number
-  /** The cells last sent, by key: a frame the same as them changes nothing on screen, and is not sent. */
-  sent: Map<string, string>
-}
-
-type Mount = { layout?: Layout; labels?: boolean; names?: Site['names']; legend?: string }
-
-/** A call running, and the spectrum it plays on: the main loop's, or its subagent's own. */
-type Running = { call: Call; owner: Spectrum }
 
 /** The context window now, with its breakdown: the meter, and where its top is. */
 async function measureContext($: EngineInterface): Promise<Measured> {
@@ -112,20 +78,8 @@ async function publish($: EngineInterface, prefs: Prefs) {
 }
 
 export const register: Register = on => {
-  // The animation is the module's own: a reload starts it from silence. The
-  // main loop plays on the spectrum, each subagent on its own voice.
-  const spectrum = new Spectrum()
-  const ensemble = new Ensemble()
-  const sites = new Map<string, Site>()
-  // Tool calls by their id while they run, the ones that may yet be put to the
-  // person, and the ones put to the person until answered, on each spectrum
-  // the ask plays on.
-  const calls = new Map<string, Running>()
-  const checks = new Map<string, Check>()
-  const asks = new Map<string, [Spectrum, Ask][]>()
-  // The context window's size, and where auto-compact runs in it (1 when it is off).
-  let windowSize: number | undefined
-  let limit = 1
+  const stage = new Stage(PANE)
+  const { spectrum, ensemble, sites } = stage
   let ticker: Timer | undefined
   let tempo = FRAME_MS
   // Which ticker's ticks count (not one replaced or stopped, still in flight),
@@ -133,96 +87,6 @@ export const register: Register = on => {
   // stands still while nothing plays.
   let ticks = 0
   let last: number | undefined
-  // What the person has set with /viz: the one copy, which the atoms publish
-  // for the drawings and the store keeps across sessions.
-  let prefs: Prefs = DEFAULTS
-  // What the terminal's background is read from, and the tone every drawing paints for.
-  let backdrop: Backdrop = {}
-  let tone: Tone = 'dark'
-  // Whether Claude is working, as the prompt's band and hint line are told.
-  let isWorking = false
-  // The prompt's column less the band's five, as the band above is told it:
-  // narrower beside a docked pane. The hint line is told only the screen's.
-  let bodyColumns: number | undefined
-  // The subagent whose transcript the person has open, as the band above and
-  // the pane are told it; none for the main conversation's. The hint line is
-  // not told it, and the band below draws for what the band above was last told.
-  let viewed: string | undefined
-  // Runs the frames until the music stops and the bars have fallen; made by
-  // session.start, whose `$` the frames draw through.
-  let wake = () => {}
-  // Starts the idle show on a drawing that stays up, if nothing plays yet.
-  let rest = () => {}
-
-  const retone = () => {
-    tone = toneFor(prefs.ground, backdrop)
-  }
-  const drawn = () => ({ hasPane: sites.has(PANE), hasBand: [...sites.keys()].some(id => id !== PANE) })
-  // The subagent in view while it is on stage, which the drawings put in focus;
-  // else the one whose transcript the demo has opened.
-  const inView = () => ensemble.find(viewed) ?? ensemble.find(spectrum.demoView)
-
-  // A call decided, its ask answered; `answer` wakes the frames too, which a
-  // drawing may not do (it writes state), so a drawing settles it and the frames notice.
-  const settle = (id: string): boolean => {
-    checks.delete(id)
-    const asked = asks.get(id)
-    if (asked === undefined) return false
-    asks.delete(id)
-    for (const [owner, ask] of asked) owner.answer(ask)
-    return true
-  }
-  // A call put to the person: the vamp on the main spectrum, which the whole
-  // band hears, and a subagent's on its own channel too.
-  const ask = (owner: Spectrum, source: SourceId, call: Call | undefined, grace?: number): [Spectrum, Ask][] =>
-    owner === spectrum
-      ? [[spectrum, spectrum.ask(source, call, grace)]]
-      : [
-          [spectrum, spectrum.ask(source, undefined, grace)],
-          [owner, owner.ask(source, call, grace)],
-        ]
-  const answer = (id: string) => {
-    if (!settle(id)) return
-    // The dialog that asked is gone: try the drawings it covered at once.
-    for (const site of sites.values()) if (site.retryAt !== undefined) site.retryAt = 0
-    wake()
-  }
-
-  const measured = (context: Measured) => {
-    windowSize = context.window
-    limit = context.limit
-    return context
-  }
-
-  // The context measured now, not at the next response: the meter moves there
-  // on a drawing that shows, and is simply there on the next one.
-  const remeasured = (context: Measured) => {
-    const isShown = sites.size > 0
-    spectrum.measure(percentOf(measured(context)), limit, !isShown)
-    if (isShown) wake()
-  }
-
-  // A drawing of the same key and size keeps its bars where they stood. One
-  // drawn again while a dialog covers it is still held: the dialog may show it
-  // as it was, so the frames go on trying until one lands.
-  const mount = (requestId: string, key: string, columns: number, rows: number, extra: Mount = {}): Site => {
-    const had = sites.get(requestId)
-    const isSame = had?.key === key && had.board.columns === columns && had.board.rows === rows
-    const board = isSame ? had.board : new Board(columns, rows, extra.layout)
-    const site = {
-      requestId,
-      key,
-      board,
-      labels: extra.labels ?? false,
-      names: extra.names,
-      legend: extra.legend,
-      retryAt: had?.retryAt,
-      sent: new Map<string, string>(),
-    }
-    sites.set(requestId, site)
-    rest()
-    return site
-  }
 
   on('session.start', async ($, e, next) => {
     // A refused frame holds the drawing rather than dropping it: a dialog takes
@@ -271,30 +135,10 @@ export const register: Register = on => {
       )
     }
     const frame = (elapsed: number) => {
-      // No idle show while a subagent works, though the main loop rests.
-      spectrum.ambient = isAmbient(prefs, drawn()) && ensemble.isCalm()
-      spectrum.step(elapsed)
-      ensemble.step(elapsed)
-      const focus = inView()
-      for (const site of sites.values()) site.board.step(spectrum, ensemble, focus)
-      for (const site of sites.values()) {
-        if (site.retryAt !== undefined && spectrum.now < site.retryAt) continue
-        blit(site, site.key, site.board.paint(prefs.theme, spectrum, ensemble, site.labels, tone, focus))
-        if (site.names) blit(site, site.names.key, trail(spectrum, prefs.theme, site.names.columns, site.names.rows, tone, ensemble, focus))
-        if (site.legend) blit(site, site.legend, site.board.legend(prefs.theme, tone))
-      }
-      const pacing = pace({
-        isCalm: spectrum.isCalm() && ensemble.isCalm(),
-        isAmbient: spectrum.ambient,
-        isResting: spectrum.isResting(),
-        isQuiet: spectrum.isQuiet(),
-        isSettled: [...sites.values()].every(site => site.board.isSettled()),
-        isGlinting: spectrum.glint() !== undefined && spectrum.gauge > 0,
-        isHeld: [...sites.values()].some(site => site.retryAt !== undefined),
-      })
+      const pacing = stage.frame(elapsed, blit)
       if (pacing === 'full') {
         // Something plays again after a show: back to the full rate.
-        if (tempo !== FRAME_MS) wake()
+        if (tempo !== FRAME_MS) stage.wake()
         return
       }
       if (pacing === 'same') return
@@ -303,141 +147,50 @@ export const register: Register = on => {
       else stop()
       if (wasFull) void update($, isPlaying, () => false)
     }
-    wake = () => {
-      if ((ticker !== undefined && tempo === FRAME_MS) || (prefs.mode === 'off' && sites.size === 0)) return
+    stage.wake = () => {
+      if ((ticker !== undefined && tempo === FRAME_MS) || (stage.prefs.mode === 'off' && sites.size === 0)) return
       run(FRAME_MS)
       void update($, isPlaying, () => true)
     }
-    rest = () => {
-      if (ticker === undefined && isAmbient(prefs, drawn())) run(spectrum.showMs())
+    stage.rest = () => {
+      if (ticker === undefined && isAmbient(stage.prefs, stage.drawn())) run(spectrum.showMs())
     }
 
     await $.command.register({ name: 'viz', description: 'Music visualizer for what Claude is doing', argumentHint: HINT, immediate: true })
-    prefs = prefsFrom(await $.store.get('prefs'))
-    await publish($, prefs)
+    stage.prefs = prefsFrom(await $.store.get('prefs'))
+    await publish($, stage.prefs)
     // The terminal's background, as Claude Code's theme and the terminal tell it.
-    backdrop = {
+    stage.backdrop = {
       theme: await themeOf($),
       colorfgbg: await $.env.get('COLORFGBG').catch(() => undefined),
     }
-    retone()
+    stage.retone()
     // Playing or not as the frames are now: a reload mid-turn may have woken them already.
     await update($, isPlaying, () => ticker !== undefined && tempo === FRAME_MS)
     // The meter as it stood, after a reload or on a resumed session.
-    void measureContext($).then(remeasured, () => {})
+    void measureContext($).then(context => stage.remeasured(context), () => {})
     // The subagents at work through a reload, each back in a channel of its own.
     for (const agent of await $.agent.list().catch(() => [])) {
       const info = { name: agent.name, description: agent.description, type: agent.type }
       if (agent.status === 'pending' || agent.status === 'running' || agent.status === 'waiting') ensemble.join(agent.id, info)
       else ensemble.know(agent.id, info)
     }
-    if (!ensemble.isCalm()) wake()
+    if (!ensemble.isCalm()) stage.wake()
 
     return next(e)
   })
 
-  // The person types: the keys play on a drawing that is up anyway.
-  on('prompt.edit', ($, e, next) => {
-    if (isKeyed(prefs.mode, { ...drawn(), isWorking })) {
-      spectrum.edited(e.text, e.start, e.end, e.inputText)
-      wake()
-    }
-
-    return next(e)
-  })
-
-  // A prompt sent: a sweep up the spectrum.
-  on('prompt.submit', ($, e, next) => {
-    spectrum.kick()
-    wake()
-
-    return next(e)
-  }).catch(($, e, next) => next(e))
-
-  // The model's response as it streams, played a chunk at a time: a
-  // subagent's on its own voice, one never heard of softer on the main spectrum.
-  on('turn.step', async function* ($, e, next) {
-    const voice = ensemble.voiceOf(e.agentId)
-    const step = voice !== undefined ? new Step(voice.spectrum) : new Step(spectrum, e.agentId !== undefined)
-    wake()
-    try {
-      for await (const chunk of next(e)) {
-        step.hear(chunk)
-        // The frames may have stopped in a lull mid-stream.
-        wake()
-        yield chunk
-      }
-    } finally {
-      step.end()
-    }
-  })
-
-  // A tool runs: a hit, its name, a held note until it returns; a subagent's in its own channel.
-  on('tool.call', async ($, e, next) => {
-    const owner = ensemble.voiceOf(e.agentId)?.spectrum ?? spectrum
-    const call = owner.startCall(String(e.tool))
-    const id = e.tool_use_id
-    if (id !== undefined) {
-      calls.set(id, { call, owner })
-      if (PERSON.has(String(e.tool))) asks.set(id, ask(owner, call.source, call, 0))
-      else checks.set(id, { tool: e.tool, agentId: e.agentId, input: inputKey(argumentsOf(e)) })
-    }
-    wake()
-    try {
-      return await next(e)
-    } finally {
-      if (id !== undefined) {
-        calls.delete(id)
-        answer(id)
-      }
-      owner.endCall(call)
-    }
-  }).catch(($, e, next) => next(e))
-
-  // A tool that ran and failed flashes red. A call refused (at the dialog, by a
-  // rule or by auto mode) or cut by an interrupt never ran: core marks it an
-  // error too, but this is not raised for it.
-  on('classic.PostToolUseFailure', ($, e, next) => {
-    if (e.is_interrupt !== true) {
-      const owner = ensemble.find(e.agent_id)?.spectrum ?? spectrum
-      owner.error()
-      wake()
-    }
-
-    return next(e)
-  })
-
-  // The person is asked to allow a call: unless an answer comes within the grace
-  // (a hook's), its held note rests and the vamp plays until it is answered.
-  // Only asks that reach the person raise this, not the ones auto mode's
-  // classifier settles. It watches, and passes the request on unchanged.
-  on('classic.PermissionRequest', ($, e, next) => {
-    const id = requestFor(checks, e.tool_name, e.agent_id, e.tool_input)
-    if (id !== undefined) {
-      checks.delete(id)
-      const running = calls.get(id)
-      asks.set(id, ask(running?.owner ?? spectrum, running?.call.source ?? sourceOf(e.tool_name), running?.call))
-      wake()
-    }
-
-    return next(e)
-  })
-
-  // A tool's progress row shows once it runs: the ask was answered.
-  on('ui.render', { component: 'ToolProgress' }, ($, e, next) => {
-    settle(e.props.tool_use_id)
-
-    return next(e)
-  })
+  // Prompts, the response, tool calls and their asks, the ends of turns, subagents.
+  music(on, stage)
 
   // The context window, measured after each turn: the meter at the right edge.
   on('session.measure', async ($, e, next) => {
     if (e.changed.includes('context')) {
-      if (e.context.window !== windowSize) await measureContext($).then(measured, () => {})
+      if (e.context.window !== stage.windowSize) await measureContext($).then(context => stage.measured(context), () => {})
       const percent = percentOf(e.context)
       if (percent !== undefined) {
-        spectrum.measure(percent, limit)
-        wake()
+        spectrum.measure(percent, stage.limit)
+        stage.wake()
       }
     }
 
@@ -448,7 +201,7 @@ export const register: Register = on => {
   // holds now, which no response has reported yet.
   on('classic.SessionStart', ($, e, next) => {
     if ((e.source === 'clear' || e.source === 'resume') && e.agent_id === undefined) {
-      void measureContext($).then(remeasured, () => {})
+      void measureContext($).then(context => stage.remeasured(context), () => {})
     }
 
     return next(e)
@@ -462,9 +215,9 @@ export const register: Register = on => {
       .then(() => themeOf($))
       .then(
         setting => {
-          backdrop = { ...backdrop, theme: setting }
-          retone()
-          if (sites.size > 0) wake()
+          stage.backdrop = { ...stage.backdrop, theme: setting }
+          stage.retone()
+          if (sites.size > 0) stage.wake()
         },
         () => {},
       )
@@ -478,7 +231,7 @@ export const register: Register = on => {
     void $.clock
       .sleep(SETTLED)
       .then(() => measureContext($))
-      .then(remeasured, () => {})
+      .then(context => stage.remeasured(context), () => {})
 
     return next(e)
   })
@@ -487,65 +240,44 @@ export const register: Register = on => {
   on('session.compact', async ($, e, next) => {
     if (e.agentId !== undefined || e.trigger === 'precompute') return next(e)
     spectrum.beginRewind()
-    wake()
+    stage.wake()
     try {
       const done = await next(e)
-      if ('tokensAfter' in done && done.tokensAfter !== undefined && windowSize !== undefined && windowSize > 0) {
-        spectrum.measure((100 * done.tokensAfter) / windowSize, limit)
+      if ('tokensAfter' in done && done.tokensAfter !== undefined && stage.windowSize !== undefined && stage.windowSize > 0) {
+        spectrum.measure((100 * done.tokensAfter) / stage.windowSize, stage.limit)
       }
 
       return done
     } finally {
       spectrum.endRewind()
-      wake()
+      stage.wake()
     }
   })
-
-  // The turn ends: a cymbal, a sweep down when interrupted, red on an error. A
-  // subagent's ends in its own channel, which says how it went and fades.
-  on('turn.complete', ($, e, next) => {
-    if (e.agentId === undefined || !ensemble.end(e.agentId, e.reason)) spectrum.ended(e.reason, e.agentId !== undefined)
-    wake()
-
-    return next(e)
-  })
-
-  // A subagent starts: a channel of its own beside the main spectrum. It
-  // watches, and passes the spawn on unchanged.
-  on('agent.spawn', async ($, e, next) => {
-    const spawned = await next(e)
-    if (spawned.agentId !== undefined) {
-      ensemble.join(spawned.agentId, { name: e.name, description: e.description, type: e.subagentType })
-      wake()
-    }
-
-    return spawned
-  }).catch(($, e, next) => next(e))
 
   // The band as either site draws it: across `bodyColumns`, or mini at its right edge.
   const band = (ui: Pick<Elements['terminal'], 'Box' | 'Raster'>, requestId: string, s: VizSize, t: VizTheme, bodyColumns: number, room: number) => {
     const { Box, Raster } = ui
-    const focus = inView()
+    const focus = stage.inView()
     if (s === 'mini') {
       const columns = clamp(Math.min(MINI_COLUMNS, bodyColumns), 1, 512)
       const rows = Math.min(MINI_ROWS, room)
       const nameColumns = Math.min(MINI_NAMES, bodyColumns - columns)
       const names = nameColumns >= 8 ? { key: 'names', columns: nameColumns, rows } : undefined
-      const site = mount(requestId, 'mini', columns, rows, { layout: MINI_LAYOUT, names })
+      const site = stage.mount(requestId, 'mini', columns, rows, { layout: MINI_LAYOUT, names })
 
       return (
         <Box width={bodyColumns} justifyContent="flex-end">
-          {names && <Raster key="names" columns={names.columns} rows={rows} cells={trail(spectrum, t, names.columns, rows, tone, ensemble, focus)} />}
-          <Raster key="mini" columns={columns} rows={rows} cells={site.board.paint(t, spectrum, ensemble, false, tone, focus)} />
+          {names && <Raster key="names" columns={names.columns} rows={rows} cells={trail(spectrum, t, names.columns, rows, stage.tone, ensemble, focus)} />}
+          <Raster key="mini" columns={columns} rows={rows} cells={site.board.paint(t, spectrum, ensemble, false, stage.tone, focus)} />
         </Box>
       )
     }
 
     const columns = clamp(bodyColumns, 1, 512)
     const rows = Math.min(BAND_ROWS, room)
-    const site = mount(requestId, 'band', columns, rows, { layout: wide(columns), labels: true })
+    const site = stage.mount(requestId, 'band', columns, rows, { layout: wide(columns), labels: true })
 
-    return <Raster key="band" columns={columns} rows={rows} cells={site.board.paint(t, spectrum, ensemble, true, tone, focus)} />
+    return <Raster key="band" columns={columns} rows={rows} cells={site.board.paint(t, spectrum, ensemble, true, stage.tone, focus)} />
   }
 
   // Above the prompt: the band in the slot over the input.
@@ -559,13 +291,13 @@ export const register: Register = on => {
       read($, isPaneOpen),
     ])
     if (e.surface === 'terminal') {
-      isWorking = e.props.isWorking
+      stage.isWorking = e.props.isWorking
       // A switch of transcript draws this again: told even while the band is down, for the band below.
-      viewed = e.props.view?.agentId
+      stage.viewed = e.props.view?.agentId
     }
-    if (e.surface === 'terminal' && e.props.bodyColumns !== bodyColumns) {
-      const had = bodyColumns
-      bodyColumns = e.props.bodyColumns
+    if (e.surface === 'terminal' && e.props.bodyColumns !== stage.bodyColumns) {
+      const had = stage.bodyColumns
+      stage.bodyColumns = e.props.bodyColumns
       // A pane docked or closed: the band below the prompt fits itself again.
       if (had !== undefined && p === 'below') $.ui.invalidate('ui.render')
     }
@@ -589,7 +321,7 @@ export const register: Register = on => {
       read($, isPlaying),
       read($, isPaneOpen),
     ])
-    if (e.surface === 'terminal') isWorking = e.props.isWorking
+    if (e.surface === 'terminal') stage.isWorking = e.props.isWorking
     const hint = await next(e)
     const view = { surface: e.surface, isWorking: e.props.isWorking, isPlaying: playing, isPaneOpen: paneOpen }
     if (e.surface !== 'terminal' || !isBandShown({ mode: m, place: p }, view, 'below')) {
@@ -601,7 +333,7 @@ export const register: Register = on => {
     const ui = $.ui.resolve(e)
     const { Box } = ui
     // As wide as the band above would be; until it has been told, the screen less its five.
-    const columns = bodyColumns ?? (e.viewport?.columns ?? 80) - 5
+    const columns = stage.bodyColumns ?? (e.viewport?.columns ?? 80) - 5
 
     return (
       <Box flexDirection="column">
@@ -620,15 +352,15 @@ export const register: Register = on => {
     }
 
     const { Box, Raster } = $.ui.resolve(e)
-    viewed = e.props.view?.agentId
+    stage.viewed = e.props.view?.agentId
     const columns = clamp(e.props.bodyColumns, 1, 512)
     const rows = clamp(e.props.scroll.bodyRows - 1, 2, PANE_ROWS)
-    const site = mount(PANE, 'pane', columns, rows, { layout: wide(columns), labels: true, legend: 'legend' })
+    const site = stage.mount(PANE, 'pane', columns, rows, { layout: wide(columns), labels: true, legend: 'legend' })
 
     return (
       <Box flexDirection="column">
-        <Raster key="pane" columns={columns} rows={rows} cells={site.board.paint(t, spectrum, ensemble, true, tone, inView())} />
-        <Raster key="legend" columns={columns} rows={1} cells={site.board.legend(t, tone)} />
+        <Raster key="pane" columns={columns} rows={rows} cells={site.board.paint(t, spectrum, ensemble, true, stage.tone, stage.inView())} />
+        <Raster key="legend" columns={columns} rows={1} cells={site.board.legend(t, stage.tone)} />
       </Box>
     )
   })
@@ -659,7 +391,7 @@ export const register: Register = on => {
           <Box flexDirection="column" width={8}>
             <Text dimColor>{DOCTOR_ROWS.join('\n')}</Text>
           </Box>
-          <Raster key="doctor" columns={columns} rows={DOCTOR_ROWS.length} cells={swatches(t, tone, columns)} />
+          <Raster key="doctor" columns={columns} rows={DOCTOR_ROWS.length} cells={swatches(t, stage.tone, columns)} />
         </Box>
         <Text dimColor>{DOCTOR_HINTS.join('\n')}</Text>
       </Box>
@@ -668,14 +400,14 @@ export const register: Register = on => {
 
   // /viz: what it does is viz.ts's to say; this does it.
   on('command.run', { command: 'viz' }, async ($, e) => {
-    const outcome = command(e.args, prefs, { isPaneOpen: await read($, isPaneOpen), backdrop })
+    const outcome = command(e.args, stage.prefs, { isPaneOpen: await read($, isPaneOpen), backdrop: stage.backdrop })
     if (outcome.isDoctor) {
       const [term, colorterm, program] = await Promise.all([
         $.env.get('TERM').catch(() => undefined),
         $.env.get('COLORTERM').catch(() => undefined),
         $.env.get('TERM_PROGRAM').catch(() => undefined),
       ])
-      return { text: doctorReport({ term, colorterm, program }, prefs, backdrop) }
+      return { text: doctorReport({ term, colorterm, program }, stage.prefs, stage.backdrop) }
     }
     if (outcome.isReplyOnly) return { text: outcome.text }
 
@@ -694,17 +426,17 @@ export const register: Register = on => {
       }
     }
     if (outcome.isDemo) spectrum.playDemo(ensemble)
-    const before = prefs
-    prefs = outcome.prefs
-    retone()
-    await publish($, prefs)
+    const before = stage.prefs
+    stage.prefs = outcome.prefs
+    stage.retone()
+    await publish($, stage.prefs)
     // Save what this command changed over what is saved: another session may
     // have saved the rest since this one read it.
-    const changed = changes(before, prefs)
+    const changed = changes(before, stage.prefs)
     if (Object.keys(changed).length > 0) {
       await $.store.set('prefs', { ...savedOf(await $.store.get('prefs')), ...changed })
     }
-    wake()
+    stage.wake()
 
     return { text }
   })
