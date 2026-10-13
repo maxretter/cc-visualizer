@@ -2,6 +2,7 @@
 // and what the person has set. No `$`: register.tsx reads the world into it
 // and runs the frames, and music.ts plays on it.
 
+import type { VizTheme } from '../types'
 import type { Layout } from './engine/bars'
 import { Board } from './engine/board'
 import { inkOf } from './engine/color'
@@ -119,23 +120,36 @@ export class Stage {
   }
 
   /**
+   * What a drawing paints now, in `theme` (the one set, unless a render read
+   * another), by key, in the order a frame sends them: its board, the tool
+   * names beside a mini one, and the legend under the pane's. Its first
+   * render and each frame after paint the same way.
+   */
+  cells(site: Site, theme: VizTheme = this.prefs.theme): Map<string, string> {
+    const { spectrum, ensemble } = this
+    const ink = inkOf(theme, this.tone)
+    const focus = this.inView()
+    const cells = new Map([[site.key, site.board.paint(ink, spectrum, ensemble, site.labels, focus)]])
+    if (site.names) cells.set(site.names.key, trail(spectrum, ink, site.names.columns, site.names.rows, ensemble, focus))
+    if (site.legend) cells.set(site.legend, site.board.legend(ink))
+    return cells
+  }
+
+  /**
    * A frame, `elapsed` after the last: the music moves on, and each drawing
    * not held is painted and handed to `blit`. What pace the frames run at now.
    */
   frame(elapsed: number, blit: (site: Site, key: string, cells: string) => void): Pace {
-    const { spectrum, ensemble, sites, prefs, tone } = this
+    const { spectrum, ensemble, sites, prefs } = this
     // No idle show while a subagent works, though the main loop rests.
     spectrum.ambient = isAmbient(prefs, this.drawn()) && ensemble.isCalm()
     spectrum.step(elapsed)
     ensemble.step(elapsed)
     const focus = this.inView()
-    const ink = inkOf(prefs.theme, tone)
     for (const site of sites.values()) site.board.step(spectrum, ensemble, focus)
     for (const site of sites.values()) {
       if (site.retryAt !== undefined && spectrum.now < site.retryAt) continue
-      blit(site, site.key, site.board.paint(ink, spectrum, ensemble, site.labels, focus))
-      if (site.names) blit(site, site.names.key, trail(spectrum, ink, site.names.columns, site.names.rows, ensemble, focus))
-      if (site.legend) blit(site, site.legend, site.board.legend(ink))
+      for (const [key, cells] of this.cells(site)) blit(site, key, cells)
     }
     const held = [...sites.values()].filter(site => site.retryAt !== undefined).length
     return pace({

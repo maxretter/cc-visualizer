@@ -12,7 +12,6 @@ import type { Layout } from './engine/bars'
 import { inkOf } from './engine/color'
 import { DOCTOR_ROWS, swatches } from './engine/doctor'
 import { FRAME_MS } from './engine/math'
-import { trail } from './engine/trail'
 import { music } from './music'
 import { Stage } from './stage'
 import type { Site } from './stage'
@@ -400,19 +399,18 @@ export const register: Register = on => {
   // The band as either site draws it: across `bodyColumns`, or mini at its right edge.
   const band = (ui: Pick<Elements['terminal'], 'Box' | 'Raster'>, requestId: string, s: VizSize, t: VizTheme, bodyColumns: number, room: number) => {
     const { Box, Raster } = ui
-    const focus = stage.inView()
-    const ink = inkOf(t, stage.tone)
     if (s === 'mini') {
       const columns = clamp(Math.min(MINI_COLUMNS, bodyColumns), 1, 512)
       const rows = Math.min(MINI_ROWS, room)
       const nameColumns = Math.min(MINI_NAMES, bodyColumns - columns)
       const names = nameColumns >= 8 ? { key: 'names', columns: nameColumns, rows } : undefined
       const site = stage.mount(requestId, 'mini', columns, rows, { layout: MINI_LAYOUT, names })
+      const cells = stage.cells(site, t)
 
       return (
         <Box width={bodyColumns} justifyContent="flex-end">
-          {names && <Raster key="names" columns={names.columns} rows={rows} cells={trail(spectrum, ink, names.columns, rows, ensemble, focus)} />}
-          <Raster key="mini" columns={columns} rows={rows} cells={site.board.paint(ink, spectrum, ensemble, false, focus)} />
+          {names && <Raster key="names" columns={names.columns} rows={rows} cells={cells.get('names')!} />}
+          <Raster key="mini" columns={columns} rows={rows} cells={cells.get('mini')!} />
         </Box>
       )
     }
@@ -421,7 +419,7 @@ export const register: Register = on => {
     const rows = Math.min(BAND_ROWS, room)
     const site = stage.mount(requestId, 'band', columns, rows, { layout: wide(columns), labels: true })
 
-    return <Raster key="band" columns={columns} rows={rows} cells={site.board.paint(ink, spectrum, ensemble, true, focus)} />
+    return <Raster key="band" columns={columns} rows={rows} cells={stage.cells(site, t).get('band')!} />
   }
 
   // Above the prompt: the band in the slot over the input. Another surface
@@ -493,16 +491,16 @@ export const register: Register = on => {
 
     const t = checked(isTheme, await read($, theme), stage.prefs.theme)
     const { Box, Raster } = $.ui.resolve(e)
-    const ink = inkOf(t, stage.tone)
     stage.viewed = e.props.view?.agentId
     const columns = clamp(e.props.bodyColumns, 1, 512)
     const rows = clamp(e.props.scroll.bodyRows - 1, 2, PANE_ROWS)
     const site = stage.mount(PANE, 'pane', columns, rows, { layout: wide(columns), labels: true, legend: 'legend' })
+    const cells = stage.cells(site, t)
 
     return (
       <Box flexDirection="column">
-        <Raster key="pane" columns={columns} rows={rows} cells={site.board.paint(ink, spectrum, ensemble, true, stage.inView())} />
-        <Raster key="legend" columns={columns} rows={1} cells={site.board.legend(ink)} />
+        <Raster key="pane" columns={columns} rows={rows} cells={cells.get('pane')!} />
+        <Raster key="legend" columns={columns} rows={1} cells={cells.get('legend')!} />
       </Box>
     )
   })
