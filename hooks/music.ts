@@ -83,7 +83,7 @@ export function music(on: On, stage: Stage) {
   }
 
   // The person types: the keys play on a drawing that is up anyway.
-  on('prompt.edit', ($, e, next) => {
+  on('prompt.edit', (_, e, next) => {
     if (isKeyed(stage.prefs.mode, { ...stage.drawn(), isWorking: stage.isWorking })) {
       spectrum.edited(e.text, e.start, e.end, e.inputText)
       stage.wake()
@@ -93,16 +93,16 @@ export function music(on: On, stage: Stage) {
   })
 
   // A prompt sent: a sweep up the spectrum.
-  on('prompt.submit', ($, e, next) => {
+  on('prompt.submit', (_, e, next) => {
     spectrum.kick()
     stage.wake()
 
     return next(e)
-  }).catch(($, e, next) => next(e))
+  }).catch((_, e, next) => next(e))
 
   // The model's response as it streams, played a chunk at a time: a
   // subagent's on its own voice, one never heard of softer on the main spectrum.
-  on('turn.step', async function* ($, e, next) {
+  on('turn.step', async function* (_, e, next) {
     const voice = ensemble.voiceOf(e.agentId)
     const step = voice !== undefined ? new Step(voice.spectrum) : new Step(spectrum, e.agentId !== undefined)
     if (e.agentId === undefined) steps.add(step)
@@ -121,7 +121,7 @@ export function music(on: On, stage: Stage) {
   })
 
   // A tool runs: a hit, its name, a held note until it returns; a subagent's in its own channel.
-  on('tool.call', async ($, e, next) => {
+  on('tool.call', async (_, e, next) => {
     const owner = ensemble.voiceOf(e.agentId)?.spectrum ?? spectrum
     const running: Running = { call: owner.startCall(String(e.tool)), owner, agentId: e.agentId }
     const id = e.tool_use_id
@@ -137,12 +137,12 @@ export function music(on: On, stage: Stage) {
     } finally {
       end(id, running)
     }
-  }).catch(($, e, next) => next(e))
+  }).catch((_, e, next) => next(e))
 
   // A tool that ran and failed flashes red. A call refused (at the dialog, by a
   // rule or by auto mode) or cut by an interrupt never ran: core marks it an
   // error too, but this is not raised for it.
-  on('classic.PostToolUseFailure', ($, e, next) => {
+  on('classic.PostToolUseFailure', (_, e, next) => {
     if (e.is_interrupt !== true) {
       const owner = ensemble.find(e.agent_id)?.spectrum ?? spectrum
       owner.error()
@@ -157,7 +157,7 @@ export function music(on: On, stage: Stage) {
   // beneath may answer it, and then nobody waits on the person. Only asks that
   // reach the person raise this, not the ones auto mode's classifier settles.
   // It watches, and passes the request on unchanged.
-  on('classic.PermissionRequest', async ($, e, next) => {
+  on('classic.PermissionRequest', async (_, e, next) => {
     const id = requestFor(checks, e.tool_name, e.agent_id, e.tool_input)
     if (id !== undefined) {
       checks.delete(id)
@@ -172,7 +172,7 @@ export function music(on: On, stage: Stage) {
   })
 
   // The run-in-background pill shows under a call once it runs: the ask was answered.
-  on('ui.render', { component: 'ToolProgress', props: { kind: 'background_hint' } }, ($, e, next) => {
+  on('ui.render', { component: 'ToolProgress', props: { kind: 'background_hint' } }, (_, e, next) => {
     settle(e.props.tool_use_id)
 
     return next(e)
@@ -182,7 +182,7 @@ export function music(on: On, stage: Stage) {
   // subagent's ends in its own channel, which says how it went and fades. The
   // main loop's takes what is left of it with it, never a subagent's: a call
   // whose return never came, its ask, its thinking.
-  on('turn.complete', ($, e, next) => {
+  on('turn.complete', (_, e, next) => {
     if (e.agentId === undefined) {
       for (const [id, running] of calls) if (running.agentId === undefined) end(id, running)
       for (const step of steps) step.end()
@@ -200,7 +200,7 @@ export function music(on: On, stage: Stage) {
   // A subagent's loop starts: its channel opens now, for the spawn of its type
   // still unanswered, so that its first steps play there; one heard of before
   // plays again. It watches, and passes the start on unchanged.
-  on('classic.SubagentStart', ($, e, next) => {
+  on('classic.SubagentStart', (_, e, next) => {
     let voice = ensemble.voiceOf(e.agent_id)
     const spawn = voice === undefined ? [...spawning].find(spawn => spawn.agentId === undefined && spawn.type === e.agent_type) : undefined
     if (spawn !== undefined) {
@@ -215,7 +215,7 @@ export function music(on: On, stage: Stage) {
   // A subagent stops: its channel says it's done and fades, unless a hook
   // beneath sends it back to work. Its turn's end may not come after: this
   // ends it all the same. It watches, and passes the stop on unchanged.
-  on('classic.SubagentStop', async ($, e, next) => {
+  on('classic.SubagentStop', async (_, e, next) => {
     const stopped = await next(e)
     if (stopped.block === undefined) {
       if (ensemble.end(e.agent_id, 'answer')) stage.wake()
@@ -228,7 +228,7 @@ export function music(on: On, stage: Stage) {
   // A subagent starts: a channel of its own beside the main spectrum, unless
   // its loop runs elsewhere: a teammate in a terminal pane of its own, whose id
   // is its address, sends nothing here. It watches, and passes the spawn on unchanged.
-  on('agent.spawn', async ($, e, next) => {
+  on('agent.spawn', async (_, e, next) => {
     const spawn: Spawning = { info: { name: e.name, description: e.description, type: e.subagentType }, type: e.isTeammate ? e.name : e.subagentType }
     spawning.add(spawn)
     try {
@@ -248,5 +248,5 @@ export function music(on: On, stage: Stage) {
       spawning.delete(spawn)
       if (spawning.size === 0) early.clear()
     }
-  }).catch(($, e, next) => next(e))
+  }).catch((_, e, next) => next(e))
 }

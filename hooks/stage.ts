@@ -34,6 +34,11 @@ type Mount = { layout?: Layout; labels?: boolean; names?: Site['names']; legend?
 /** What runs the frames: frames.ts's, which each session start binds. */
 export type Driver = { wake(): void; rest(): void }
 
+/** The columns the engine keeps beside the prompt's own: the band above is told the screen's less these. */
+const GUTTER = 5
+/** The screen's columns, when the engine does not say. */
+const SCREEN = 80
+
 export class Stage {
   // The animation is the module's own: a reload starts it from silence. The
   // main loop plays on the spectrum, each subagent on its own voice.
@@ -52,8 +57,8 @@ export class Stage {
   backdrop: Backdrop = {}
   // Whether Claude is working, as the prompt's band and hint line are told.
   isWorking = false
-  // The prompt's column less the band's five, as the band above is told it:
-  // narrower beside a docked pane. The hint line is told only the screen's.
+  // The prompt's column, the screen's less the gutter, as the band above is
+  // told it: narrower beside a docked pane. The hint line is told only the screen's.
   bodyColumns: number | undefined
   // The subagent whose transcript the person has open, as the band above and
   // the pane are told it; none for the main conversation's. The hint line is
@@ -83,6 +88,11 @@ export class Stage {
   /** The tone every drawing paints for: the one /viz ground set, or as the backdrop reads. */
   get tone(): Tone {
     return toneFor(this.prefs.ground, this.backdrop)
+  }
+
+  /** The prompt's column, as the band above was last told it; until it has been, the screen's less the gutter. */
+  promptColumns(viewport: { columns: number } | undefined): number {
+    return this.bodyColumns ?? (viewport?.columns ?? SCREEN) - GUTTER
   }
 
   drawn() {

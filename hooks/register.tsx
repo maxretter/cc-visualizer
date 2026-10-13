@@ -57,7 +57,8 @@ const place = atom({ plugin: 'visualizer', key: 'place' } as const, DEFAULTS.pla
 const isPlaying = atom({ plugin: 'visualizer', key: 'isPlaying' } as const, false)
 const isPaneOpen = atom({ plugin: 'visualizer', key: 'isPaneOpen' } as const, false)
 
-const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, Math.floor(n)))
+/** `n` floored to a whole number, then held between `lo` and `hi`. */
+const clampInt = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, Math.floor(n)))
 
 /** A value read back from the state, checked: another plugin may have rewritten it. Else `own`, the plugin's copy. */
 function checked<T>(is: (value: unknown) => value is T, value: unknown, own: T): T {
@@ -267,7 +268,7 @@ export const register: Register = on => {
     const { Box, Raster } = ui
     const focus = stage.inView()
     if (s === 'mini') {
-      const columns = clamp(Math.min(MINI_COLUMNS, bodyColumns), 1, 512)
+      const columns = clampInt(Math.min(MINI_COLUMNS, bodyColumns), 1, 512)
       const rows = Math.min(MINI_ROWS, room)
       const nameColumns = Math.min(MINI_NAMES, bodyColumns - columns)
       const names = nameColumns >= 8 ? { key: 'names', columns: nameColumns, rows } : undefined
@@ -281,7 +282,7 @@ export const register: Register = on => {
       )
     }
 
-    const columns = clamp(bodyColumns, 1, 512)
+    const columns = clampInt(bodyColumns, 1, 512)
     const rows = Math.min(BAND_ROWS, room)
     const site = stage.mount(requestId, 'band', columns, rows, { layout: wide(columns), labels: true })
 
@@ -311,7 +312,7 @@ export const register: Register = on => {
     }
 
     const { theme: t, size: s } = await looksOf($, stage.prefs)
-    return band($.ui.resolve(e), e.requestId, s, t, e.props.bodyColumns, clamp(e.props.maxRows - 1, 1, 256))
+    return band($.ui.resolve(e), e.requestId, s, t, e.props.bodyColumns, clampInt(e.props.maxRows - 1, 1, 256))
   })
 
   // Below the prompt: the band over the hint line, which stays as the engine
@@ -337,8 +338,8 @@ export const register: Register = on => {
     const { theme: t, size: s } = await looksOf($, stage.prefs)
     const ui = $.ui.resolve(e)
     const { Box } = ui
-    // As wide as the band above would be; until it has been told, the screen less its five.
-    const columns = stage.bodyColumns ?? (e.viewport?.columns ?? 80) - 5
+    // As wide as the band above would be.
+    const columns = stage.promptColumns(e.viewport)
 
     return (
       <Box flexDirection="column">
@@ -358,8 +359,8 @@ export const register: Register = on => {
     const t = checked(isTheme, await read($, theme), stage.prefs.theme)
     const { Box, Raster } = $.ui.resolve(e)
     stage.viewed = e.props.view?.agentId
-    const columns = clamp(e.props.bodyColumns, 1, 512)
-    const rows = clamp(e.props.scroll.bodyRows - 1, 2, PANE_ROWS)
+    const columns = clampInt(e.props.bodyColumns, 1, 512)
+    const rows = clampInt(e.props.scroll.bodyRows - 1, 2, PANE_ROWS)
     const site = stage.mount(PANE, 'pane', columns, rows, { layout: wide(columns), labels: true, legend: 'legend' })
 
     return (
@@ -390,9 +391,9 @@ export const register: Register = on => {
     const { Box, Text, Raster } = $.ui.resolve(e)
     // As wide as the transcript has room for beside the names, 64 at most. The
     // row is told no width of its own: the prompt's column, as the band above
-    // was told it, else the screen's, each less the engine's five.
-    const width = stage.bodyColumns ?? (e.viewport?.columns ?? 80) - 5
-    const columns = clamp(width - DOCTOR_NAMES, 1, 64)
+    // was told it.
+    const width = stage.promptColumns(e.viewport)
+    const columns = clampInt(width - DOCTOR_NAMES, 1, 64)
 
     return (
       <Box flexDirection="column">
