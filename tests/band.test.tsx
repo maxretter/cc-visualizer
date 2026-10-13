@@ -1,7 +1,7 @@
 import type { On } from 'claude-code'
 import { describe, expect, mock, test } from 'claude-code/testing'
 
-import { PANE_WAITS } from '../hooks/viz'
+import { DEFAULTS, PANE_WAITS } from '../hooks/viz'
 import { band, pane, prefsStore, staged } from './support'
 
 describe('band', () => {
@@ -238,6 +238,14 @@ describe('place', () => {
     const writes = saved.length
     await $.command.run(run('pos below'))
     expect(saved).toHaveLength(writes)
+  })
+
+  test('/viz saves the prefs as they read, dropping what else the store held', async ($, on) => {
+    engine(on)
+    const saved = prefsStore(on, { theme: 'synthwave', size: 'huge', junk: 1 })
+
+    await $.command.run(run('pos below'))
+    expect(saved.at(-1)).toEqual({ ...DEFAULTS, theme: 'synthwave', place: 'below' })
   })
 
   test('the band below the prompt is as wide as the prompt, beside a docked pane too', async ($, on) => {

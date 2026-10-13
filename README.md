@@ -105,7 +105,7 @@ Its hooks, in `hooks/register.tsx` and `hooks/music.ts`:
 | `agent.spawn` | when a subagent starts, gives it a channel, named as the Agent call named it. It decides nothing, and passes the spawn on as it came |
 | `classic.PostToolUseFailure` | a tool that failed flashes the bars red |
 | `classic.PermissionRequest` | when Claude Code is about to ask you to allow a tool, the band pulses amber until you answer. It decides nothing, and passes the request on as it came; the plugin has no hook on the permission decision itself |
-| `config.set` (`theme`, `autoCompact`) | when you change Claude Code's theme or auto-compact, it reads the new setting a moment later, to paint for the background or move the meter's top. The change passes on as it came |
+| `config.set` (`theme`, `autoCompact`) | when you change Claude Code's theme or auto-compact, it waits for the change to be written, then paints for the new background or measures the context window again to move the meter's top. The change passes on as it came |
 | `session.measure`, `session.compact`, `classic.SessionStart` | the context meter: its fill, a rewind while compacting, an estimate after `/clear` |
 | `ui.render` (`AbovePrompt`, `PromptHint`, `Pane`, `CommandOutput`, `ToolProgress`) | draws the band, the pane and `/viz doctor`'s swatches, and reads which transcript is in view, to put a subagent in focus; a tool's progress row means a permission ask was answered |
 | `ui.close` | notes that the pane closed |

@@ -33,7 +33,6 @@ import {
   measuredFrom,
   percentOf,
   prefsFrom,
-  savedOf,
 } from './viz'
 import type { Measured, Prefs, View } from './viz'
 
@@ -49,8 +48,6 @@ const wide = (columns: number): Layout => ({ width: columns >= 30 ? 2 : 1, gap: 
 const MINI_NAMES = 56
 /** How long between tries at a drawing whose frames the engine refuses. */
 const RETRY = 500
-/** How long after a setting changes to read it again: by then it has been made, or refused. */
-const SETTLED = 100
 /** The column of names beside the doctor's swatches. */
 const DOCTOR_NAMES = 8
 
@@ -256,33 +253,26 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // Claude Code's theme changes: once it has, the band follows it onto a light
-  // background or off one. It watches, and passes the change on unchanged.
-  on('config.set', { key: 'theme' }, ($, e, next) => {
-    void $.clock
-      .sleep(SETTLED)
-      .then(() => themeOf($))
-      .then(
-        setting => {
-          stage.backdrop = { ...stage.backdrop, theme: setting }
-          stage.retone()
-          if (sites.size > 0) stage.wake()
-        },
-        () => {},
-      )
+  // Claude Code's theme changes: once it is written, the band follows it onto
+  // a light background or off one. It watches, and passes the change on unchanged.
+  on('config.set', { key: 'theme' }, async ($, e, next) => {
+    const set = await next(e)
+    if (set.deny === undefined) {
+      stage.backdrop = { ...stage.backdrop, theme: set.value }
+      stage.retone()
+      if (sites.size > 0) stage.wake()
+    }
 
-    return next(e)
+    return set
   })
 
-  // Auto-compact turned on or off: once it has, the top of the meter moves.
-  // It watches, and passes the change on unchanged.
-  on('config.set', { key: 'autoCompact' }, ($, e, next) => {
-    void $.clock
-      .sleep(SETTLED)
-      .then(() => measureContext($))
-      .then(context => stage.remeasured(context), () => {})
+  // Auto-compact turned on or off: once it is written, the top of the meter
+  // moves. It watches, and passes the change on unchanged.
+  on('config.set', { key: 'autoCompact' }, async ($, e, next) => {
+    const set = await next(e)
+    if (set.deny === undefined) void measureContext($).then(context => stage.remeasured(context), () => {})
 
-    return next(e)
+    return set
   })
 
   // The conversation compacts: the tape rewinds until it is done, and the meter drains.
@@ -485,10 +475,11 @@ export const register: Register = on => {
     stage.retone()
     await publish($, stage.prefs)
     // Save what this command changed over what is saved: another session may
-    // have saved the rest since this one read it.
+    // have saved the rest since this one read it. What is saved is read as the
+    // prefs, so a key no pref has, or a value none takes, is not kept.
     const changed = changes(before, stage.prefs)
     if (Object.keys(changed).length > 0) {
-      await $.store.set('prefs', { ...savedOf(await $.store.get('prefs')), ...changed })
+      await $.store.set('prefs', { ...prefsFrom(await $.store.get('prefs')), ...changed })
     }
     stage.wake()
 

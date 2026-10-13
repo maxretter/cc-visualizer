@@ -84,6 +84,19 @@ describe('light terminals', () => {
     await ui.unmount()
   })
 
+  test("a change of Claude Code's theme paints the next frame for it, once written", async ($, on) => {
+    const { clock, ui, cells } = await staged($, on, { theme: 'light' })
+    const feet = () => brightness(colors(cells(), 80).at(-1)!)
+    await clock.advance(500)
+    expect(feet()).toBeGreaterThan(0.4)
+
+    await $.config.set({ key: 'theme', value: 'dark', previous: 'light', provider: { plugin: 'engine', tier: 'core' }, origin: { kind: 'composer' } })
+    // A frame or so: no wait for the setting to settle.
+    await clock.advance(50)
+    expect(feet()).toBeLessThan(0.15)
+    await ui.unmount()
+  })
+
   test('/viz doctor reports the terminal, and draws its swatches', async ($, on) => {
     const { ui, viz } = await staged($, on, {
       env: { TERM: 'xterm-256color', COLORTERM: 'truecolor', COLORFGBG: '0;15' },
