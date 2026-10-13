@@ -8,9 +8,9 @@ import type { Spectrum } from './spectrum'
 import { mainVoice } from './ensemble'
 import type { Ensemble, Voice } from './ensemble'
 import { focusLead, voiceLabel } from './names'
-import { Bars } from './bars'
+import { Bars, layoutFor, WIDE } from './bars'
 import type { Layout } from './bars'
-import { CHANNEL, Channels, channelsFit, WIDE } from './channels'
+import { CHANNEL, Channels, channelsFit } from './channels'
 
 /** The fewest columns the main bars narrow to while a subagent in focus grows into their room: a channel's. */
 const MAIN_LEAST = CHANNEL
@@ -47,7 +47,7 @@ export class Board {
     readonly rows: number,
     layout?: Layout,
   ) {
-    this.layout = layout ?? { width: columns >= WIDE ? 2 : 1, gap: 1 }
+    this.layout = layout ?? layoutFor(columns)
     this.bars = new Bars(columns, rows, this.layout)
     this.channels = new Channels(channelsFit(columns), rows)
     this.cells = canvas(columns, rows)
@@ -80,7 +80,7 @@ export class Board {
   step(spectrum: Spectrum, ensemble: Ensemble, focus?: Voice) {
     this.channels.step(ensemble, spectrum.dt, this.columns - MAIN_LEAST, focus)
     const main = Math.max(Math.min(this.columns, MAIN_LEAST), this.columns - this.channels.width)
-    if (main !== this.bars.columns) this.bars = this.bars.resize(main, { ...this.layout, width: main >= WIDE ? this.layout.width : 1 })
+    if (main !== this.bars.columns) this.bars = this.bars.resize(main, layoutFor(main, this.layout))
     this.bars.step(this.stray(focus)?.spectrum ?? spectrum)
   }
 

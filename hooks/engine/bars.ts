@@ -36,6 +36,20 @@ const DOTS = [
  */
 export type Layout = { width: number; gap: number; meter?: boolean }
 
+/** Bars this wide or wider are two cells a bar, and name each tool over its band; narrower, a channel's label names who plays. */
+export const WIDE = 30
+
+/**
+ * Bars `columns` wide laid out: a cell between each bar, and each bar
+ * `width` cells (two unless said) once they are wide, one below; with
+ * `meter`, the context meter at the right edge.
+ */
+export const layoutFor = (columns: number, { width = 2, meter = false }: { width?: number; meter?: boolean } = {}): Layout => ({
+  width: columns >= WIDE ? width : 1,
+  gap: 1,
+  meter,
+})
+
 /**
  * What bars show beside the music of the spectrum they draw: the context
  * meter of another (the main loop's, while a subagent plays on them), and
@@ -83,7 +97,7 @@ export class Bars {
   constructor(
     readonly columns: number,
     readonly rows: number,
-    private readonly layout: Layout = { width: columns >= 30 ? 2 : 1, gap: 1 },
+    private readonly layout: Layout = layoutFor(columns),
   ) {
     this.width = layout.width
     this.gap = layout.gap

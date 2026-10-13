@@ -1,18 +1,17 @@
 // The subagents' channels beside the main bars: each a small spectrum of its
 // own voice, opening as its agent starts and closing once it is done.
 
+import { N } from './sources'
 import { LEGEND_GRAY, mix } from './color'
 import type { Ink } from './color'
 import { SPACE, write } from './cells'
 import type { Ensemble, Voice } from './ensemble'
 import { focusLead, voiceLabel } from './names'
-import { Bars } from './bars'
-import type { Layout } from './bars'
+import { Bars, layoutFor, WIDE } from './bars'
 
-/** A channel's width: the gap before it, and its bars, one an instrument. */
-export const CHANNEL = 17
 const CHANNEL_GAP = 2
-const CHANNEL_LAYOUT: Layout = { width: 1, gap: 1 }
+/** A channel's width: the gap before it, then its bars, one cell for each instrument with a cell between. */
+export const CHANNEL = CHANNEL_GAP + 2 * N - 1
 
 /** How long a channel takes to open, fading in as it does, or to close once its voice has left. */
 const OPEN = 400
@@ -31,12 +30,6 @@ const smooth = (t: number) => t * t * (3 - 2 * t)
  * in focus. One whose voice has left closes.
  */
 type Seat = { voice: Voice; bars: Bars; open: number; shown: number; grow: number; isLeaving: boolean }
-
-/** Bars this wide or wider are two cells a bar, and name each tool over its band; narrower, a channel's label names who plays. */
-export const WIDE = 30
-
-/** A channel's bars laid out for `columns`: two cells a bar once it has grown wide. */
-const channelLayout = (columns: number): Layout => (columns >= WIDE ? { width: 2, gap: 1 } : CHANNEL_LAYOUT)
 
 /**
  * The subagents' channels, side by side, up to `capacity` of them and `rows`
@@ -89,7 +82,7 @@ export class Channels {
       const open = this.isFresh ? 1 : 0
       // Made with the subagent in focus on stage, its channel has grown already.
       const grow = this.isFresh && voice === focus ? 1 : 0
-      this.seats.push({ voice, bars: new Bars(CHANNEL - CHANNEL_GAP, this.rows, CHANNEL_LAYOUT), open, shown: open, grow, isLeaving: false })
+      this.seats.push({ voice, bars: new Bars(CHANNEL - CHANNEL_GAP, this.rows), open, shown: open, grow, isLeaving: false })
       staying += 1
     }
     this.isFresh = false
@@ -117,7 +110,7 @@ export class Channels {
     const give = Math.max(0, room - this.seats.reduce((sum, seat) => sum + Math.round(CHANNEL * smooth(seat.open)), 0))
     for (const seat of this.seats) {
       const columns = CHANNEL - CHANNEL_GAP + Math.round(give * smooth(seat.grow))
-      if (columns !== seat.bars.columns) seat.bars = seat.bars.resize(columns, channelLayout(columns))
+      if (columns !== seat.bars.columns) seat.bars = seat.bars.resize(columns, layoutFor(columns))
       seat.bars.step(seat.voice.spectrum)
     }
   }
@@ -191,7 +184,7 @@ export class Channels {
     for (const seat of this.seats) {
       if (!seat.isLeaving && staying++ >= capacity) continue
       const { columns } = seat.bars
-      channels.seats.push({ ...seat, bars: rows === seat.bars.rows ? seat.bars : seat.bars.resize(columns, channelLayout(columns), rows) })
+      channels.seats.push({ ...seat, bars: rows === seat.bars.rows ? seat.bars : seat.bars.resize(columns, layoutFor(columns), rows) })
     }
     channels.isFresh = this.isFresh
     return channels

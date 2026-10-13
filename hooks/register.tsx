@@ -8,7 +8,7 @@ import { atom, read, update } from 'claude-code'
 import type { Elements, EngineInterface, Register, Timer } from 'claude-code'
 
 import type { VizMode, VizSize, VizTheme } from '../types'
-import type { Layout } from './engine/bars'
+import { layoutFor } from './engine/bars'
 import { inkOf } from './engine/color'
 import { DOCTOR_ROWS, swatches } from './engine/doctor'
 import { FRAME_MS } from './engine/math'
@@ -39,19 +39,19 @@ import type { Measured, Prefs, View } from './viz'
 const PANE = 'viz'
 const BAND_ROWS = 5
 const PANE_ROWS = 32
+/** The rows the pane asks to open with, its legend's among them, while seated inline above the prompt; the dock ignores it. */
+const PANE_INLINE_ROWS = 14
 const MINI_COLUMNS = 32
 const MINI_ROWS = 2
-const MINI_LAYOUT: Layout = { width: 1, gap: 1, meter: true }
-/** The band's and the pane's bars, the context meter at the right edge. */
-const wide = (columns: number): Layout => ({ width: columns >= 30 ? 2 : 1, gap: 1, meter: true })
 /** The most columns the tool names beside the mini spectrum take. */
 const MINI_NAMES = 56
 /** How long between tries at a drawing whose frames the engine refuses, and so between frames while every drawing is refused. */
 const RETRY = 500
 /** How often the watchdog looks for a new frame: four periods of the slowest the frames run at. */
 const WATCH = 2_000
-/** The column of names beside the doctor's swatches. */
+/** The column of names beside the doctor's swatches, and the most columns the swatches take. */
 const DOCTOR_NAMES = 8
+const DOCTOR_COLUMNS = 64
 
 // The prefs the drawings read, published from the plugin's own copy, and what plays.
 const mode = atom({ plugin: 'visualizer', key: 'mode' } as const, DEFAULTS.mode)
@@ -404,7 +404,8 @@ export const register: Register = on => {
       const rows = Math.min(MINI_ROWS, room)
       const nameColumns = Math.min(MINI_NAMES, bodyColumns - columns)
       const names = nameColumns >= 8 ? { key: 'names', columns: nameColumns, rows } : undefined
-      const site = stage.mount(requestId, 'mini', columns, rows, { layout: MINI_LAYOUT, names })
+      // Its bars a cell each however wide, the context meter at their right edge.
+      const site = stage.mount(requestId, 'mini', columns, rows, { layout: layoutFor(columns, { width: 1, meter: true }), names })
       const cells = stage.cells(site, t)
 
       return (
@@ -417,7 +418,8 @@ export const register: Register = on => {
 
     const columns = clamp(bodyColumns, 1, 512)
     const rows = Math.min(BAND_ROWS, room)
-    const site = stage.mount(requestId, 'band', columns, rows, { layout: wide(columns), labels: true })
+    // The context meter at the bars' right edge, as on the pane.
+    const site = stage.mount(requestId, 'band', columns, rows, { layout: layoutFor(columns, { meter: true }), labels: true })
 
     return <Raster key="band" columns={columns} rows={rows} cells={stage.cells(site, t).get('band')!} />
   }
@@ -494,7 +496,7 @@ export const register: Register = on => {
     stage.viewed = e.props.view?.agentId
     const columns = clamp(e.props.bodyColumns, 1, 512)
     const rows = clamp(e.props.scroll.bodyRows - 1, 2, PANE_ROWS)
-    const site = stage.mount(PANE, 'pane', columns, rows, { layout: wide(columns), labels: true, legend: 'legend' })
+    const site = stage.mount(PANE, 'pane', columns, rows, { layout: layoutFor(columns, { meter: true }), labels: true, legend: 'legend' })
     const cells = stage.cells(site, t)
 
     return (
@@ -523,11 +525,11 @@ export const register: Register = on => {
     if (e.surface !== 'terminal' || e.props.isErrored || e.props.args.trim().toLowerCase().split(/\s+/)[0] !== 'doctor') return next(e)
     const t = checked(isTheme, await read($, theme), stage.prefs.theme)
     const { Box, Text, Raster } = $.ui.resolve(e)
-    // As wide as the transcript has room for beside the names, 64 at most. The
-    // row is told no width of its own: the prompt's column, as the band above
-    // was told it, else the screen's, each less the engine's five.
+    // As wide as the transcript has room for beside the names, up to
+    // DOCTOR_COLUMNS. The row is told no width of its own: the prompt's column,
+    // as the band above was told it, else the screen's, each less the engine's five.
     const width = stage.bodyColumns ?? (e.viewport?.columns ?? 80) - 5
-    const columns = clamp(width - DOCTOR_NAMES, 1, 64)
+    const columns = clamp(width - DOCTOR_NAMES, 1, DOCTOR_COLUMNS)
 
     return (
       <Box flexDirection="column">
@@ -562,7 +564,7 @@ export const register: Register = on => {
       // The band steps aside once the pane is drawn, not before: an open
       // refused, or one that waits undrawn, leaves it where it was.
       try {
-        const opened = await $.ui.open({ id: PANE, title: 'Visualizer', rows: 14 })
+        const opened = await $.ui.open({ id: PANE, title: 'Visualizer', rows: PANE_INLINE_ROWS })
         if (!opened.isPlaced) text = PANE_WAITS
       } finally {
         await notePane($)
