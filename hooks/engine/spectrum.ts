@@ -69,6 +69,15 @@ const RUN = 25
 /** The most notes a run plays: a longer paste plays this many of its characters, spread over it. */
 const RUN_NOTES = 32
 
+const SURROGATE = /[\ud800-\udfff]/
+/** Whether a pair of surrogates, one character beyond the BMP, starts at code unit `k` of `text`. */
+const isPair = (text: string, k: number) => {
+  const high = text.charCodeAt(k)
+  if (high < 0xd800 || high > 0xdbff) return false
+  const low = text.charCodeAt(k + 1)
+  return low >= 0xdc00 && low <= 0xdfff
+}
+
 /** While the model thinks, sparks of thought a second on its band: these when it is calm, up to as many more again as its text streams. */
 const SPARKS = 1.5
 /** How long a spark's spike takes to run the length of the brainwave. */
@@ -225,11 +234,28 @@ export class Spectrum {
    * deleted: quieter notes, the run going backward.
    */
   typed(text: string, isErased = false) {
-    const chars = [...text]
-    const count = Math.min(chars.length, RUN_NOTES)
+    // A paste may run to megabytes, and only a run of its characters plays:
+    // they are read where they sit, the text never copied. Its length is in
+    // characters, a pair of surrogates one; without any, nearly always, each
+    // code unit is one, and is read straight from its place.
+    let length = text.length
+    if (SURROGATE.test(text)) {
+      length = 0
+      for (let k = 0; k < text.length; k += isPair(text, k) ? 2 : 1) length += 1
+    }
+    const count = Math.min(length, RUN_NOTES)
+    const run: string[] = []
+    // The run's characters, found in the order they sit in the text: character `c` starts at code unit `k`.
+    for (let m = 0, c = 0, k = 0; m < count; m++) {
+      const n = isErased ? count - 1 - m : m
+      const i = Math.floor((n * length) / count)
+      const place = isErased ? length - 1 - i : i
+      if (length === text.length) k = place
+      else for (; c < place; c++) k += isPair(text, k) ? 2 : 1
+      run[n] = text.slice(k, isPair(text, k) ? k + 2 : k + 1)
+    }
     for (let n = 0; n < count; n++) {
-      const i = Math.floor((n * chars.length) / count)
-      const ch = chars[isErased ? chars.length - 1 - i : i]!
+      const ch = run[n]!
       const at = this.now + n * RUN
       const loud = isErased ? 0.5 : 1
       if (ch.trim() === '') this.notes.push({ x: 0.5, at, energy: 0.3 * loud, sigma: 0.14 })
