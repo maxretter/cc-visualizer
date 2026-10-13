@@ -37,9 +37,11 @@ export class Stage {
   readonly spectrum = new Spectrum()
   readonly ensemble = new Ensemble()
   readonly sites = new Map<string, Site>()
-  // The context window's size, and where auto-compact runs in it (1 when it is off).
+  // The context window's size, and where auto-compact runs in it (1 when it is
+  // off): unknown until a measure comes with its breakdown, which only a
+  // session bound has.
   windowSize: number | undefined
-  limit = 1
+  limit: number | undefined
   // What the person has set with /viz: the one copy, which the atoms publish
   // for the drawings and the store keeps across sessions.
   prefs: Prefs = DEFAULTS

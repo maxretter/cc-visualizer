@@ -9,7 +9,7 @@ import { band, colors, staged, text } from './support'
 describe('the context, through the plugin', () => {
   test('a measure fills the meter, measured again only when the window changes', async ($, on) => {
     let usages = 0
-    const context = { tokens: 1, window: 200_000 }
+    const context = { tokens: 1, window: 200_000, breakdown: { totalTokens: 1, isAutoCompactEnabled: false } }
     const { clock, ui, label } = await staged($, on, {
       context: () => {
         usages += 1
@@ -163,7 +163,7 @@ describe('context, measured', () => {
     return at < 0 ? undefined : colors(cells, 80)[0]![at]
   }
 
-  test('/clear moves the meter to what the fresh conversation holds', async ($, on) => {
+  test("/clear, or a conversation resumed, moves the meter to what it holds; a subagent's start does not", async ($, on) => {
     let context: object = { tokens: 140_000, window: 200_000 }
     const { clock, ui, label } = await staged($, on, { context: () => context })
     await clock.advance(500)
@@ -174,6 +174,44 @@ describe('context, measured', () => {
     await $.classic.SessionStart({ source: 'clear' })
     await clock.advance(2000)
     expect(label()).toContain('context 10%')
+
+    context = { window: 200_000, breakdown: { totalTokens: 90_000, isAutoCompactEnabled: false } }
+    await $.classic.SessionStart({ source: 'resume' })
+    await clock.advance(2000)
+    expect(label()).toContain('context 45%')
+
+    // A subagent's conversation starting is its own: the meter stays where it is.
+    context = { window: 200_000, breakdown: { totalTokens: 180_000, isAutoCompactEnabled: false } }
+    await $.classic.SessionStart({ source: 'clear', agent_id: 'a1' })
+    await clock.advance(2000)
+    expect(label()).toContain('context 45%')
+    await ui.unmount()
+  })
+
+  test('a top unknown at the start, read before the session was bound, is measured at the first measure', async ($, on) => {
+    let usages = 0
+    const compacting = { isAutoCompactEnabled: true, autoCompactThreshold: 160_000, totalTokens: 152_000 }
+    // No breakdown yet: the top is the whole window, 76% of the way up, amber.
+    let context: object = { tokens: 152_000, window: 200_000 }
+    const { clock, ui, cells } = await staged($, on, {
+      context: () => {
+        usages += 1
+        return context
+      },
+    })
+    await clock.advance(500)
+    expect(colorOf(cells(), 'context')).toBe(mix(0, 0xf59e0b, 0.85))
+
+    // A response: the session is bound, and the breakdown places the top. 95% of the way to auto-compact: red.
+    context = { ...context, breakdown: compacting }
+    const measure = { context: { tokens: 152_000, window: 200_000 }, rateLimits: [], changed: ['context' as const] }
+    await $.session.measure(measure)
+    await clock.advance(3000)
+    expect(colorOf(cells(), 'context')).toBe(mix(0, 0xef4444, 0.85))
+    expect(usages).toBe(2)
+    // Known now, and the window the same: not measured again.
+    await $.session.measure(measure)
+    expect(usages).toBe(2)
     await ui.unmount()
   })
 

@@ -286,7 +286,8 @@ export const register: Register = on => {
   // The context window, measured after each turn: the meter at the right edge.
   on('session.measure', async ($, e, next) => {
     if (e.changed.includes('context')) {
-      if (e.context.window !== stage.windowSize) await measureContext($).then(context => stage.measured(context), () => {})
+      // Another window, or a top not known yet (read before the session was bound): measured again.
+      if (e.context.window !== stage.windowSize || stage.limit === undefined) await measureContext($).then(context => stage.measured(context), () => {})
       const percent = percentOf(e.context)
       if (percent !== undefined) {
         spectrum.measure(percent, stage.limit)

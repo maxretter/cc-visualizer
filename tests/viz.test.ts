@@ -267,11 +267,11 @@ describe('permission requests', () => {
 })
 
 describe('the context window', () => {
-  test('the top of the meter is where auto-compact runs, the whole window when it is off', () => {
+  test('the top of the meter is where auto-compact runs, the whole window when it is off, unknown without the breakdown', () => {
     const on = { totalTokens: 1, isAutoCompactEnabled: true, autoCompactThreshold: 160_000 }
     expect(measuredFrom({ tokens: 50_000, window: 200_000, breakdown: on }).limit).toBe(0.8)
     expect(measuredFrom({ tokens: 50_000, window: 200_000, breakdown: { ...on, isAutoCompactEnabled: false } }).limit).toBe(1)
-    expect(measuredFrom({ tokens: 50_000, window: 200_000 }).limit).toBe(1)
+    expect(measuredFrom({ tokens: 50_000, window: 200_000 }).limit).toBeUndefined()
   })
 
   test('before a response reports the fill, the breakdown estimates it', () => {

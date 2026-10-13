@@ -346,16 +346,21 @@ export type Context = {
   breakdown?: { totalTokens: number; isAutoCompactEnabled: boolean; autoCompactThreshold?: number }
 }
 
-/** The context window, and where auto-compact runs in it as a share of it (1 when it is off): the top of the meter. */
-export type Measured = { tokens?: number; window: number; percent?: number; limit: number }
+/**
+ * The context window, and where auto-compact runs in it as a share of it (1
+ * when it is off): the top of the meter, unknown when the breakdown is missing.
+ */
+export type Measured = { tokens?: number; window: number; percent?: number; limit?: number }
 
 /** A context measured with its breakdown: before the window's first response (a cleared or resumed conversation), the breakdown's estimate. */
 export function measuredFrom(context: Context): Measured {
   const { breakdown } = context
   const limit =
-    breakdown?.isAutoCompactEnabled === true && breakdown.autoCompactThreshold !== undefined && context.window > 0
-      ? breakdown.autoCompactThreshold / context.window
-      : 1
+    breakdown === undefined
+      ? undefined
+      : breakdown.isAutoCompactEnabled && breakdown.autoCompactThreshold !== undefined && context.window > 0
+        ? breakdown.autoCompactThreshold / context.window
+        : 1
   return { tokens: context.tokens ?? breakdown?.totalTokens, window: context.window, percent: context.percent, limit }
 }
 
