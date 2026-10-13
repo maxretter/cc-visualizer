@@ -132,8 +132,9 @@ claude plugin test .           # tests/*.test.ts and *.test.tsx against the engi
   - What they're made of: `sources.ts`, the instruments; `color.ts`, the themes and backgrounds; `cells.ts`, Raster cells; `math.ts`, fades, waves and noise.
 - `hooks/viz.ts`: the plugin's decisions: your saved settings, what each `/viz` command does, when the band shows, how fast the frames run. Also pure.
 - `hooks/stage.ts`: what the hooks share: the music, the drawings the frames repaint, and your settings. It paints each frame and says how fast the next should come.
+- `hooks/frames.ts`: the frames: a timer that runs them at the pace the stage asks for, a watchdog that starts it again if the host drops it, and whether the music plays. It has no `$`: the session's start hands it the clock, the screen and the state through its own.
 - `hooks/music.ts`: the hooks that play the music as Claude works. None of them use `$`.
-- `hooks/register.tsx`: the hooks that use `$`: the session's start and the frames it runs, the context meter, Claude Code's settings, the drawings and `/viz`. They read what Claude Code tells them, ask the modules above, and do what they say. `claude plugin validate` follows `$` only into functions in the same file, and reads a `$.state` atom only in the file that declares it, so these stay together.
+- `hooks/register.tsx`: the hooks that use `$`: the session's start, which hands the frames its `$`, the context meter, Claude Code's settings, the drawings and `/viz`. They read what Claude Code tells them, ask the modules above, and do what they say. `claude plugin validate` follows `$` only into functions in the same file, and reads a `$.state` atom only in the file that declares it, so these stay together.
 - `types/index.d.ts`: the plugin's state contract.
 - `tests/`: a file for each topic (`music`, `thinking`, `waiting`, `subagents`, and so on), testing the engine, and the hooks through Claude Code's test harness; `viz.test.ts` tests the decisions on their own, and `support.tsx` holds the helpers the tests share.
 

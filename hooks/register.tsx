@@ -1,20 +1,20 @@
-// The hooks that reach the world through `$`: the session's start and the
-// frames it runs, the context window, Claude Code's settings, the drawings,
-// and /viz. The hooks that only play the music are in music.ts, and the
-// session they share is stage.ts's. What to do is decided in viz.ts and the
-// music in engine/; this reads the world, asks them, and does what they say.
+// The hooks that reach the world through `$`: the session's start, which
+// hands the frames its `$`, the context window, Claude Code's settings, the
+// drawings, and /viz. The hooks that only play the music are in music.ts, the
+// session they share is stage.ts's, and frames.ts runs its frames. What to do
+// is decided in viz.ts and the music in engine/; this reads the world, asks
+// them, and does what they say.
 
 import { atom, read, update } from 'claude-code'
-import type { Elements, EngineInterface, Register, Timer } from 'claude-code'
+import type { Elements, EngineInterface, Register } from 'claude-code'
 
 import type { VizMode, VizSize, VizTheme } from '../types'
 import type { Layout } from './engine/bars'
 import { DOCTOR_ROWS, swatches } from './engine/doctor'
-import { FRAME_MS } from './engine/math'
 import { trail } from './engine/trail'
+import { Frames } from './frames'
 import { music } from './music'
 import { Stage } from './stage'
-import type { Site } from './stage'
 import {
   DEFAULTS,
   DOCTOR_HINTS,
@@ -24,7 +24,6 @@ import {
   command,
   doctorReport,
   factsOf,
-  isAmbient,
   isBandShown,
   isMode,
   isPlace,
@@ -46,10 +45,6 @@ const MINI_LAYOUT: Layout = { width: 1, gap: 1, meter: true }
 const wide = (columns: number): Layout => ({ width: columns >= 30 ? 2 : 1, gap: 1, meter: true })
 /** The most columns the tool names beside the mini spectrum take. */
 const MINI_NAMES = 56
-/** How long between tries at a drawing whose frames the engine refuses, and so between frames while every drawing is refused. */
-const RETRY = 500
-/** How often the watchdog looks for a new frame: four periods of the slowest the frames run at. */
-const WATCH = 2_000
 /** The column of names beside the doctor's swatches. */
 const DOCTOR_NAMES = 8
 
@@ -125,162 +120,36 @@ async function notePane($: EngineInterface) {
   if ((await read($, isPaneOpen)) !== isDrawn) await update($, isPaneOpen, () => isDrawn)
 }
 
+/** The subagents at work through a reload, each back in a channel of its own; the rest known, should they work again. */
+async function rejoinAgents($: EngineInterface, stage: Stage) {
+  const { ensemble } = stage
+  for (const agent of await $.agent.list()) {
+    // A teammate in a terminal pane of its own, whose id is its address, sends nothing here.
+    if (agent.id === agent.teammateId) continue
+    const info = { name: agent.name, description: agent.description, type: agent.type }
+    if (agent.status === 'pending' || agent.status === 'running' || agent.status === 'waiting') ensemble.join(agent.id, info)
+    else ensemble.know(agent.id, info)
+  }
+  if (!ensemble.isCalm()) stage.wake()
+}
+
 export const register: Register = on => {
   const stage = new Stage(PANE)
   const { spectrum, ensemble, sites } = stage
-  let ticker: Timer | undefined
-  let tempo = FRAME_MS
-  // Which ticker's ticks count (not one replaced or stopped, still in flight),
-  // and when the last frame was: none after a stop, so the music's clock
-  // stands still while nothing plays.
-  let ticks = 0
-  let last: number | undefined
-  // The ticker whose tick is still reading the clock: its next ticks are let
-  // go until it has, so a busy host's ticks never pile up and land in a burst.
-  let reading: number | undefined
-  // The frames drawn, and how many there were when the watchdog last looked.
-  let frames = 0
-  let watched = 0
-  let watchdog: Timer | undefined
-  // Whether the music plays, as `isPlaying` tells the drawings: the frames run
-  // at the full rate, or will once there is a drawing to play on. Each write
-  // of it writes this as it stands then, so the last to land is right.
-  let isAwake = false
-  // A frame failed: the frames wait for the next sound, not the idle show.
-  let hasFailed = false
-  // Whether the session draws in a terminal, the one place the drawings go.
-  let isTerminal = false
+  // The frames, kept through a start again, which finds them as they run.
+  const frames = new Frames(stage)
 
   on('session.start', async ($, e, next) => {
-    // A `-p` run, the SDK and the desktop draw no band: no frames run there.
-    isTerminal = e.surface === 'terminal'
-    // A refused frame holds the drawing rather than dropping it: a dialog takes
-    // the band off screen, and the engine shows it again as it was, without a
-    // new render, so only a frame that lands brings it back to life.
-    const hold = (site: Site) => {
-      site.retryAt = spectrum.now + RETRY
-      // None of what it was sent may be on screen: the next try sends it all.
-      site.sent.clear()
-    }
-    const blit = (site: Site, key: string, cells: string) => {
-      if (site.sent.get(key) === cells) return
-      site.sent.set(key, cells)
-      void $.ui.blit({ requestId: site.requestId, key, cells }).then(
-        sent => {
-          if (sent.deny !== undefined) {
-            hold(site)
-          } else if (site.retryAt !== undefined) {
-            site.retryAt = undefined
-            // A frame landed once the dialog went: the frames keep their own pace again at once.
-            if (ticker !== undefined && tempo === RETRY) run(FRAME_MS)
-          }
-        },
-        () => hold(site),
-      )
-    }
-    // The ticker, `ms` apart from now on: the ticks of the one before no longer count.
-    const arm = (ms: number) => {
-      ticker?.cancel()
-      tempo = ms
-      const own = ++ticks
-      ticker = $.clock.every(ms, () => tick(own))
-    }
-    const run = (ms: number) => {
-      if (ticker !== undefined && tempo === ms) return
-      if (ticker === undefined) {
-        last = undefined
-        watch()
-      }
-      arm(ms)
-    }
-    const stop = () => {
-      ticker?.cancel()
-      ticker = undefined
-      watchdog?.cancel()
-      watchdog = undefined
-      ticks += 1
-    }
-    // A refused period ends a ticker without a word, and the band would freeze
-    // as it stood: a slow timer beside it looks now and then, and starts it
-    // again when no frame has come since the last look.
-    const watch = () => {
-      watchdog?.cancel()
-      watched = frames
-      watchdog = $.clock.every(WATCH, () => {
-        if (ticker !== undefined && frames === watched) arm(tempo)
-        watched = frames
-      })
-    }
-    // A tick reads the clock and moves the music on by the time since the last
-    // frame: ticks come late when the host is busy, and the music keeps time.
-    // One that comes while the last still reads the clock is let go.
-    const tick = (own: number) => {
-      if (reading === own) return
-      reading = own
-      void $.clock.now().then(
-        now => {
-          if (reading === own) reading = undefined
-          if (own !== ticks) return
-          try {
-            const elapsed = last === undefined ? tempo : now - last
-            last = now
-            frames += 1
-            // Three looks missed: the watchdog's own period was refused.
-            if (frames - watched > (3 * WATCH) / tempo) watch()
-            frame(elapsed)
-          } catch {
-            // A frame that fails would fail at every tick: the frames stop
-            // instead, and the next sound tries them again.
-            stop()
-            rested()
-            hasFailed = true
-          }
-        },
-        () => {
-          if (reading === own) reading = undefined
-        },
-      )
-    }
-    const frame = (elapsed: number) => {
-      const pacing = stage.frame(elapsed, blit)
-      if (pacing === 'full') {
-        // Something plays again after a show: back to the full rate.
-        if (tempo !== FRAME_MS) stage.wake()
-        return
-      }
-      if (pacing === 'same') return
-      if (pacing === 'held') {
-        // Every drawing is behind a dialog: a frame only as often as one is
-        // tried, whatever plays, until one lands.
-        run(RETRY)
-        return
-      }
-      if (pacing === 'show') run(spectrum.showMs())
-      else stop()
-      rested()
-    }
-    // The music has stopped: in auto, the band steps aside.
-    const rested = () => {
-      if (!isAwake) return
-      isAwake = false
-      void update($, isPlaying, () => isAwake)
-    }
-    stage.wake = () => {
-      if (!isTerminal || (stage.prefs.mode === 'off' && sites.size === 0)) return
-      hasFailed = false
-      if (!isAwake) {
-        isAwake = true
-        void update($, isPlaying, () => isAwake)
-      }
-      // No drawing yet: in auto, `isPlaying` brings the band up, and the frames start as it mounts.
-      if (sites.size > 0) run(FRAME_MS)
-    }
-    stage.rest = () => {
-      if (ticker !== undefined || sites.size === 0 || hasFailed) return
-      // The music woke before there was a drawing to play on: it plays on this one.
-      if (isAwake) run(FRAME_MS)
-      else if (isAmbient(stage.prefs, stage.drawn())) run(spectrum.showMs())
-    }
+    // The frames run through this start's `$` from now on, and only in a
+    // terminal: a `-p` run, the SDK and the desktop draw no band.
+    frames.bind({
+      isTerminal: e.surface === 'terminal',
+      every: (ms, fn) => $.clock.every(ms, fn),
+      now: () => $.clock.now(),
+      blit: args => $.ui.blit(args),
+      tell: () => void update($, isPlaying, () => frames.isAwake),
+    })
+    stage.bind(frames)
 
     // What the first prompt needs, side by side, each step on its own so that
     // one refused leaves the rest to run.
@@ -300,7 +169,7 @@ export const register: Register = on => {
           stage.backdrop = { theme: setting, colorfgbg }
         }),
         // Playing or not as the frames are now: a reload mid-turn may have woken them already.
-        update($, isPlaying, () => isAwake),
+        update($, isPlaying, () => frames.isAwake),
       ].map(step => step.catch(() => {})),
     )
     stage.retone()
@@ -311,19 +180,7 @@ export const register: Register = on => {
     // stood, after a reload or on a resumed session.
     void measureContext($).then(context => stage.remeasured(context), () => {})
     // The subagents at work through a reload, each back in a channel of its own.
-    void $.agent
-      .list()
-      .then(agents => {
-        for (const agent of agents) {
-          // A teammate in a terminal pane of its own, whose id is its address, sends nothing here.
-          if (agent.id === agent.teammateId) continue
-          const info = { name: agent.name, description: agent.description, type: agent.type }
-          if (agent.status === 'pending' || agent.status === 'running' || agent.status === 'waiting') ensemble.join(agent.id, info)
-          else ensemble.know(agent.id, info)
-        }
-        if (!ensemble.isCalm()) stage.wake()
-      })
-      .catch(() => {})
+    void rejoinAgents($, stage).catch(() => {})
 
     return next(e)
   })

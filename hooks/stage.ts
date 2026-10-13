@@ -1,6 +1,6 @@
 // The session the hooks share: the music, the drawings its frames repaint,
-// and what the person has set. No `$`: register.tsx reads the world into it
-// and runs the frames, and music.ts plays on it.
+// and what the person has set. No `$`: register.tsx reads the world into it,
+// frames.ts runs its frames, and music.ts plays on it.
 
 import type { Layout } from './engine/bars'
 import { Board } from './engine/board'
@@ -31,6 +31,9 @@ export type Site = {
 
 type Mount = { layout?: Layout; labels?: boolean; names?: Site['names']; legend?: string }
 
+/** What runs the frames: frames.ts's, which each session start binds. */
+export type Driver = { wake(): void; rest(): void }
+
 export class Stage {
   // The animation is the module's own: a reload starts it from silence. The
   // main loop plays on the spectrum, each subagent on its own voice.
@@ -57,14 +60,26 @@ export class Stage {
   // the pane are told it; none for the main conversation's. The hint line is
   // not told it, and the band below draws for what the band above was last told.
   viewed: string | undefined
-  // Runs the frames until the music stops and the bars have fallen; made by
-  // session.start, whose `$` the frames draw through.
-  wake = () => {}
-  // Starts the idle show on a drawing that stays up, if nothing plays yet.
-  rest = () => {}
+  // What runs the frames: none until the session starts, and none run.
+  private driver: Driver | undefined
 
   /** `pane`: the pane's id, its drawing's among the sites. */
   constructor(private readonly pane: string) {}
+
+  /** The frames are run by `driver` from now on. */
+  bind(driver: Driver) {
+    this.driver = driver
+  }
+
+  /** Runs the frames until the music stops and the bars have fallen. */
+  wake() {
+    this.driver?.wake()
+  }
+
+  /** Starts the idle show on a drawing that stays up, if nothing plays yet. */
+  rest() {
+    this.driver?.rest()
+  }
 
   retone() {
     this.tone = toneFor(this.prefs.ground, this.backdrop)
