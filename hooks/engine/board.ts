@@ -4,6 +4,7 @@
 import type { VizTheme } from '../../types'
 import type { Tone } from './color'
 import { base64, blank } from './cells'
+import type { Canvas } from './cells'
 import type { Spectrum } from './spectrum'
 import { mainVoice } from './ensemble'
 import type { Ensemble, Voice } from './ensemble'
@@ -26,12 +27,21 @@ const MAIN_LEAST = CHANNEL
  * context meter stays at the main bars' right edge. A subagent in focus with
  * no channel here to grow (beside a mini strip, on a band too narrow for
  * channels, or waiting for one) plays on the main bars instead, its name leading their labels.
+ *
+ * It paints every frame into the same cells, and its legend into the same row:
+ * each is blanked and drawn again, the bars and channels straight into it, so
+ * a frame leaves nothing behind but the cells it hands on.
  */
 export class Board {
   /** The main spectrum's bars, as wide as the channels leave them. */
   bars: Bars
   readonly channels: Channels
   private readonly layout: Layout
+  /** The cells each frame paints, and the blank they start from; the same for the legend's row. */
+  private readonly cells: Canvas
+  private readonly blank: Uint32Array
+  private readonly legendRow: Canvas
+  private readonly blankRow: Uint32Array
 
   constructor(
     readonly columns: number,
@@ -41,6 +51,10 @@ export class Board {
     this.layout = layout ?? { width: columns >= WIDE ? 2 : 1, gap: 1 }
     this.bars = new Bars(columns, rows, this.layout)
     this.channels = new Channels(channelsFit(columns), rows)
+    this.blank = blank(columns * rows)
+    this.cells = { words: this.blank.slice(), columns, left: 0, right: columns }
+    this.blankRow = blank(columns)
+    this.legendRow = { words: this.blankRow.slice(), columns, left: 0, right: columns }
   }
 
   /** The subagent in focus when it has no channel here to grow into: it plays on the main bars. */
@@ -66,26 +80,28 @@ export class Board {
 
   /** The whole drawing as Raster cells: the main bars, then the channels. */
   paint(theme: VizTheme, spectrum: Spectrum, ensemble: Ensemble, labels = false, tone: Tone = 'dark', focus?: Voice): string {
-    const { columns, rows } = this
+    const { columns, cells } = this
+    const { words } = cells
+    words.set(this.blank)
     const stray = this.stray(focus)
     const look = stray === undefined ? {} : { meter: spectrum, lead: focusLead(stray) }
     // Narrowed for a subagent in focus, the main bars are labeled as a channel is: `main`, and what it is doing.
-    const isNarrowed = this.bars.columns < WIDE && this.bars.columns < columns
-    const main = this.bars.draw(theme, stray?.spectrum ?? spectrum, labels && !isNarrowed, tone, look)
-    if (labels && isNarrowed) voiceLabel(main, this.bars.columns, 0, this.bars.span, mainVoice(spectrum), 1, theme, tone)
-    if (this.bars.columns === columns) return base64(new Uint8Array(main.buffer))
-    const words = blank(columns * rows)
     const width = this.bars.columns
-    for (let r = 0; r < rows; r++) words.set(main.subarray(r * width * 3, (r + 1) * width * 3), r * columns * 3)
-    this.channels.draw(words, columns, width, theme, ensemble, tone)
+    const isNarrowed = width < WIDE && width < columns
+    cells.right = width
+    this.bars.draw(cells, theme, stray?.spectrum ?? spectrum, labels && !isNarrowed, tone, look)
+    if (labels && isNarrowed) voiceLabel(words, columns, 0, this.bars.span, mainVoice(spectrum), 1, theme, tone)
+    if (width < columns) this.channels.draw(words, columns, width, theme, ensemble, tone)
     return base64(new Uint8Array(words.buffer))
   }
 
   /** The legend under the main bars and under a channel grown wide, as wide as they are now; nothing under the other channels. */
   legend(theme: VizTheme, tone: Tone = 'dark'): string {
-    const words = blank(this.columns)
-    words.set(this.bars.legendCells(theme, tone))
-    this.channels.legend(words, this.columns, this.bars.columns, theme, tone)
-    return base64(new Uint8Array(words.buffer))
+    const row = this.legendRow
+    row.words.set(this.blankRow)
+    row.right = this.bars.columns
+    this.bars.drawLegend(row, theme, tone)
+    this.channels.legend(row.words, this.columns, this.bars.columns, theme, tone)
+    return base64(new Uint8Array(row.words.buffer))
   }
 }

@@ -334,6 +334,31 @@ describe('subagents', () => {
     const [, bottom] = text(trail(spectrum, 'instrument', 60, 2, 'dark', ensemble, scout), 60)
     expect(bottom).toMatch(/audit · main Edit · [⠁-⣿] scout Grep {2}$/)
   })
+
+  test('a board paints into the same cells each frame, nothing of the last left behind', () => {
+    const { spectrum, ensemble, step, paint, view } = staging()
+    const scout = ensemble.join('a1', { name: 'scout' })
+    ensemble.join('a2', { name: 'audit' })
+    spectrum.beginThinking()
+    scout.spectrum.startCall('Grep')
+    spectrum.startCall('Edit')
+    // Through the channels opening, one growing in view and shrinking back, all of it moving.
+    for (let t = 0; t < 2_000; t += FRAME_MS) {
+      if (t === 330) view('a1')
+      if (t === 990) view(undefined)
+      step()
+      expect(paint()).toBe(paint())
+    }
+    // All of it done and fallen: the cells a board fresh to the same stage paints.
+    spectrum.endThinking()
+    scout.spectrum.endCall(scout.spectrum.calls[0]!)
+    spectrum.endCall(spectrum.calls[0]!)
+    for (let t = 0; t < 6_000; t += 100) step(100)
+    const fresh = new Board(80, 4, { width: 2, gap: 1, meter: true })
+    fresh.step(spectrum, ensemble)
+    expect(paint()).toBe(fresh.paint('instrument', spectrum, ensemble, true, 'dark'))
+    expect(text(paint(), 80)[0]).toMatch(/scout\s+audit/)
+  })
 })
 
 describe('subagents, through the plugin', () => {

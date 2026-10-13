@@ -61,10 +61,25 @@ const linear = (v: number) => (v <= 10 ? v / 3295 : ((v / 255 + 0.055) / 1.055) 
 /** How bright a color looks, 0 to 1: its relative luminance. */
 export const luminance = (c: number) => 0.2126 * linear((c >> 16) & 255) + 0.7152 * linear((c >> 8) & 255) + 0.0722 * linear(c & 255)
 
+/**
+ * The colors darkened for a light background, each worked out once: the bars'
+ * colors on light are worked out again each time their drawing is laid out
+ * anew, every frame while a channel opens, closes or grows. Keyed by the color
+ * alone, the same color always comes out the same; cleared once it holds more
+ * than any band draws with.
+ */
+const darkened = new Map<number, number>()
+const DARKENED_MOST = 4096
+
 /** A color that stands out on the tone's background: on a light one, a pale color darkened until it does. */
 export function legible(color: number, tone: Tone): number {
+  if (tone === 'dark') return color
+  const known = darkened.get(color)
+  if (known !== undefined) return known
   let c = color
-  if (tone === 'light') while (luminance(c) > 0.3) c = mix(c, 0, 0.1)
+  while (luminance(c) > 0.3) c = mix(c, 0, 0.1)
+  if (darkened.size >= DARKENED_MOST) darkened.clear()
+  darkened.set(color, c)
   return c
 }
 

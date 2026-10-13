@@ -157,23 +157,26 @@ export const voiceName = (voice: Voice): Named => {
 /**
  * A subagent's label over its channel, `width` wide from `start`: its name in
  * its color, then what it is doing, a spinner before a call that runs; all of
- * it as far faded in as the channel is `shown`.
+ * it as far faded in as the channel is `shown`, and cut off at column `end`
+ * where less of the channel shows.
  */
-export function voiceLabel(words: Uint32Array, columns: number, start: number, width: number, voice: Voice, shown: number, theme: VizTheme, tone: Tone) {
+export function voiceLabel(words: Uint32Array, columns: number, start: number, width: number, voice: Voice, shown: number, theme: VizTheme, tone: Tone, end = columns) {
   const act = doing(voice)
   const spin = act?.isRunning === true ? 2 : 0
   const room = act === undefined ? width : Math.max(4, width - act.text.length - spin - 1)
   const name = fit(voice.name, Math.min(room, width))
-  write(words, columns, 0, start, name, mix(GROUND[tone], legible(voice.color, tone), shown))
+  write(words, columns, 0, start, name, mix(GROUND[tone], legible(voice.color, tone), shown), end)
   if (act === undefined) return
   let at = start + name.length + 1
   const left = start + width - at - spin
   if (left < 3) return
   if (spin > 0) {
     const cell = at * 3
-    words[cell] = SPINNER[Math.floor(voice.spectrum.now / SPIN) % SPINNER.length]!
-    words[cell + 1] = nameColorOf(theme, act, shown, tone)
+    if (at < end) {
+      words[cell] = SPINNER[Math.floor(voice.spectrum.now / SPIN) % SPINNER.length]!
+      words[cell + 1] = nameColorOf(theme, act, shown, tone)
+    }
     at += spin
   }
-  write(words, columns, 0, at, act.text.slice(0, left), nameColorOf(theme, act, act.strength * shown, tone))
+  write(words, columns, 0, at, act.text.slice(0, left), nameColorOf(theme, act, act.strength * shown, tone), end)
 }

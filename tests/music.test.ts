@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import { Bars } from '../hooks/engine/bars'
-import { encodeBase64 } from '../hooks/engine/cells'
+import { base64, blank, encodeBase64, write } from '../hooks/engine/cells'
 import { FRAME_MS } from '../hooks/engine/math'
 import { clockText } from '../hooks/engine/names'
 import { sourceOf, SOURCES } from '../hooks/engine/sources'
@@ -242,6 +242,20 @@ describe('cells', () => {
     }
     const every = Uint8Array.from({ length: 256 }, (_, i) => i)
     expect(encodeBase64(every)).toBe(btoa(String.fromCharCode(...every)))
+  })
+
+  test('text written keeps to what Raster draws in one cell, a `?` for the rest, and to its row', () => {
+    const words = blank(6 * 2)
+    // A control, a wide character, a combining mark, then a × as it is.
+    write(words, 6, 0, 0, 'a\u0007b中́×', 0xffffff)
+    // Past its row's end, and from before its start: cut off, never wrapped into the next.
+    write(words, 6, 0, 6, 'over', 0xffffff)
+    write(words, 6, 1, 4, 'xyz', 0xffffff)
+    write(words, 6, 1, -1, 'pq', 0xffffff)
+    // A pair of surrogates, cut where a row ends, and a row past the last.
+    write(words, 6, 1, 2, '\u{1F600}', 0xffffff, 3)
+    write(words, 6, 2, 0, 'gone', 0xffffff)
+    expect(text(base64(new Uint8Array(words.buffer)), 6)).toEqual(['a?b??×', 'q ? xy'])
   })
 })
 
