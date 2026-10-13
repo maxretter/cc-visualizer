@@ -299,8 +299,11 @@ export function pace(beat: Beat): Pace {
 
 // Permission requests ------------------------------------------------------
 
-/** A running tool call that may yet be put to the person: its tool, its loop and its input, to know its permission request by. */
-export type Check = { tool: string; agentId?: string; input?: string }
+/**
+ * A running tool call that may yet be put to the person: its tool, its loop
+ * and its arguments as they came, to know its permission request by.
+ */
+export type Check = { tool: string; agentId?: string; input: unknown }
 
 /** What a `tool.call` carries beside the tool's own arguments. */
 const ENVELOPE = new Set(['tool', 'tool_use_id', 'agentId', 'requestMeta', 'consent'])
@@ -331,18 +334,16 @@ export function inputKey(input: unknown): string | undefined {
 }
 
 /**
- * The call a permission request is for. It names none, so the oldest checked
- * with its tool, loop and input, else the oldest with its tool and loop.
+ * The call a permission request is for. It names none, so the one checked
+ * with its tool and loop; of several, the oldest with its input too, and none
+ * when no input matches. Inputs are keyed only then: a whole file's Write
+ * takes a while to.
  */
-export function requestFor(checks: ReadonlyMap<string, Check>, tool: string, agentId: string | undefined, input: unknown) {
+export function requestFor(checks: ReadonlyMap<string, Check>, tool: string, agentId: string | undefined, input: unknown): string | undefined {
+  const named = [...checks].filter(([, check]) => check.tool === tool && check.agentId === agentId)
+  if (named.length <= 1) return named[0]?.[0]
   const key = inputKey(input)
-  let id: string | undefined
-  for (const [checked, check] of checks) {
-    if (check.tool !== tool || check.agentId !== agentId) continue
-    id ??= checked
-    if (check.input === key) return checked
-  }
-  return id
+  return key === undefined ? undefined : named.find(([, check]) => inputKey(check.input) === key)?.[0]
 }
 
 // The context window -------------------------------------------------------

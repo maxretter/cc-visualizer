@@ -3,6 +3,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import { Bars } from '../hooks/engine/bars'
 import { FRAME_MS } from '../hooks/engine/math'
 import { clockText } from '../hooks/engine/names'
+import { INDEX } from '../hooks/engine/sources'
 import { BEAT, GRACE, Spectrum } from '../hooks/engine/spectrum'
 import { trail } from '../hooks/engine/trail'
 import { pane, staged, text } from './support'
@@ -82,6 +83,22 @@ describe('waiting on you', () => {
     for (let i = 0; i < 1100; i++) spectrum.step()
     expect(Math.max(...bar(0.58))).toBeLessThan(0.3)
     expect(spectrum.tick()).toBeGreaterThan(0)
+  })
+
+  test("a subagent's ask, heard on the main spectrum, rests none of the main loop's own held notes", () => {
+    const spectrum = new Spectrum()
+    const call = spectrum.startCall('Bash')
+    // A subagent's Bash waits on the person: heard here, its call on the subagent's own spectrum.
+    spectrum.ask('bash', undefined, 0)
+    for (let i = 0; i < 100; i++) spectrum.step()
+    expect(spectrum.cue).toBeGreaterThan(0.9)
+    expect(spectrum.level[INDEX.bash]).toBeGreaterThan(0.1)
+    expect(spectrum.isRunning(call)).toBe(true)
+    // The main loop's own Bash waits too: its held note rests.
+    spectrum.ask('bash', call, 0)
+    for (let i = 0; i < 100; i++) spectrum.step()
+    expect(spectrum.level[INDEX.bash]).toBe(0)
+    expect(spectrum.isCalm()).toBe(true)
   })
 
   test('the wait reads as a clock', () => {
@@ -190,6 +207,72 @@ describe('waiting on you', () => {
     await second
     await clock.advance(1000)
     expect(label()).not.toContain('waiting on you')
+    await ui.unmount()
+  })
+
+  test('a question, or a plan to approve, waits on the person at once, until it is answered', async ($, on) => {
+    const { clock, ui, label, finish } = await staged($, on)
+    const question = { question: 'Which store?', header: 'Store', options: [{ label: 'Redis', description: 'fast' }, { label: 'SQLite', description: 'simple' }], multiSelect: false }
+    const asked = [
+      () => $.tool.call({ tool: 'AskUserQuestion', questions: [question], tool_use_id: 't1' }),
+      () => $.tool.call({ tool: 'ExitPlanMode', tool_use_id: 't2' }),
+    ]
+    for (const [i, ask] of asked.entries()) {
+      const call = ask()
+      await clock.advance(100)
+      expect(label()).toMatch(/^\s*waiting on you · 0:00/)
+      finish(`t${i + 1}`)
+      await call
+      await clock.advance(1000)
+      expect(label()).not.toContain('waiting on you')
+    }
+    await ui.unmount()
+  })
+
+  test('a permission ask a hook answers never waits on the person, however long the call then runs', async ($, on) => {
+    // A settings hook beneath allows it, so the person is never asked.
+    const { clock, ui, label, finish } = await staged($, on, { decision: { behavior: 'allow' } })
+    const call = $.tool.call({ tool: 'WebFetch', url: 'https://example.com', prompt: 'Sum it up.', tool_use_id: 't1' })
+    await clock.settle()
+    await $.classic.PermissionRequest({ tool_name: 'WebFetch', tool_input: { url: 'https://example.com', prompt: 'Sum it up.' } })
+    await clock.advance(5000)
+    expect(label()).toContain('WebFetch')
+    expect(label()).not.toContain('waiting on you')
+    finish('t1')
+    await call
+    await ui.unmount()
+  })
+
+  test("the main loop's turn ends with what is left of it: an ask, a call and thinking whose ends never came", async ($, on) => {
+    let resume = () => {}
+    on('turn.step', async function* ($, e) {
+      yield { kind: 'thinking' as const, index: 0, text: 'Let me see.' }
+      await new Promise<void>(resolve => (resume = resolve))
+
+      return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn' as const, usage: null }
+    })
+    const { clock, ui, label, finish } = await staged($, on)
+    const reading = (async () => {
+      for await (const _ of $.turn.step({ turnId: 'u1', index: 0, model: 'claude-opus-5-5', messageCount: 1 })) {
+      }
+    })()
+    await clock.advance(600)
+    expect(label()).toContain('thinking')
+    const call = $.tool.call({ tool: 'Bash', command: 'ls', tool_use_id: 't1' })
+    await clock.settle()
+    await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: { command: 'ls' } })
+    await clock.advance(3000)
+    expect(label()).toMatch(/^\s*waiting on you/)
+
+    await $.turn.complete({ reason: 'aborted', answer: '', durationMs: 4000, isAborted: true, turnId: 'u1' })
+    await clock.advance(3500)
+    expect(label()).not.toContain('waiting on you')
+    expect(label()).not.toContain('thinking')
+    expect(label()).not.toContain('Bash')
+    resume()
+    await reading
+    finish('t1')
+    await call
     await ui.unmount()
   })
 })

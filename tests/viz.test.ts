@@ -247,17 +247,38 @@ describe('the pace of the frames', () => {
 })
 
 describe('permission requests', () => {
-  test('find their call by tool, loop and input; else the oldest by tool and loop', () => {
+  test('find their call by tool and loop; of several, by input too, and none when no input matches', () => {
     const checks = new Map<string, Check>([
-      ['t1', { tool: 'Bash', input: inputKey({ command: 'ls' }) }],
-      ['t2', { tool: 'Bash', input: inputKey({ command: 'rm -r build' }) }],
-      ['t3', { tool: 'Bash', agentId: 'a1', input: inputKey({ command: 'ls' }) }],
-      ['t4', { tool: 'Edit', input: inputKey({ file_path: 'x' }) }],
+      ['t1', { tool: 'Bash', input: { command: 'ls' } }],
+      ['t2', { tool: 'Bash', input: { command: 'rm -r build', timeout: 5 } }],
+      ['t3', { tool: 'Bash', agentId: 'a1', input: { command: 'ls' } }],
+      ['t4', { tool: 'Edit', input: { file_path: 'x' } }],
     ])
-    expect(requestFor(checks, 'Bash', undefined, { command: 'rm -r build' })).toBe('t2')
-    expect(requestFor(checks, 'Bash', undefined, { command: 'make' })).toBe('t1')
+    expect(requestFor(checks, 'Bash', undefined, { timeout: 5, command: 'rm -r build' })).toBe('t2')
+    // Two of its tool and loop, neither with its input: it could be either's, so it is neither's.
+    expect(requestFor(checks, 'Bash', undefined, { command: 'make' })).toBeUndefined()
+    // The one of its tool and loop, whatever its input became.
     expect(requestFor(checks, 'Bash', 'a1', { command: 'make' })).toBe('t3')
     expect(requestFor(checks, 'Write', undefined, {})).toBeUndefined()
+  })
+
+  test("key a call's input only when another of its tool and loop could be the one asked", () => {
+    let keyed = 0
+    const input = (command: string) => ({
+      get command() {
+        keyed += 1
+        return command
+      },
+    })
+    const checks = new Map<string, Check>([
+      ['t1', { tool: 'Write', input: input('a') }],
+      ['t2', { tool: 'Bash', input: input('ls') }],
+    ])
+    expect(requestFor(checks, 'Write', undefined, input('a'))).toBe('t1')
+    expect(keyed).toBe(0)
+    checks.set('t3', { tool: 'Write', input: input('b') })
+    expect(requestFor(checks, 'Write', undefined, input('b'))).toBe('t3')
+    expect(keyed).toBeGreaterThan(0)
   })
 
   test("a call's own arguments, keyed the same however their keys came", () => {

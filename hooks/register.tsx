@@ -217,6 +217,8 @@ export const register: Register = on => {
     void measureContext($).then(context => stage.remeasured(context), () => {})
     // The subagents at work through a reload, each back in a channel of its own.
     for (const agent of await $.agent.list().catch(() => [])) {
+      // A teammate in a terminal pane of its own, whose id is its address, sends nothing here.
+      if (agent.id === agent.teammateId) continue
       const info = { name: agent.name, description: agent.description, type: agent.type }
       if (agent.status === 'pending' || agent.status === 'running' || agent.status === 'waiting') ensemble.join(agent.id, info)
       else ensemble.know(agent.id, info)
